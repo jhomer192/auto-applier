@@ -1,0 +1,17 @@
+[Unit]
+Description=Auto Job Applier Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=REPO_PATH_PLACEHOLDER
+ExecStart=PYTHON_PATH_PLACEHOLDER -m bot.main
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=REPO_PATH_PLACEHOLDER/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
