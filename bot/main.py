@@ -81,14 +81,12 @@ def main() -> None:
         gmail_inbox=gmail_inbox,
     )
 
-    app = bot.build_app()
-
-    # Wire up background inbox polling if Gmail is configured
+    post_init = None
     if gmail_inbox:
         async def _post_init(application) -> None:
             asyncio.create_task(_inbox_poll_loop(application, gmail_inbox))
 
-        app.post_init = _post_init
+    app = bot.build_app(post_init=post_init)
 
     logger.info("Bot starting...")
     app.run_polling(drop_pending_updates=True)

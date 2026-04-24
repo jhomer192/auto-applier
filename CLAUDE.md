@@ -12,11 +12,22 @@ You are helping set up an automatic job application bot. It will:
 - Let the user send a job URL (LinkedIn Easy Apply, Greenhouse, or Lever) to Telegram
 - Automatically fill and submit the application using their real profile
 - Send a screenshot confirmation
+- Watch Gmail for recruiter replies and let the user respond from Telegram
 
 Follow every numbered step exactly. Run all commands yourself. Only stop and ask the user
 for input where marked **→ ASK**.
 
 ---
+
+## Step 0 — Verify Claude Code CLI is installed
+
+Run: `claude --version`
+
+If the command is not found, tell the user:
+> "This bot requires Claude Code to be installed. Run `npm install -g @anthropic-ai/claude-code`
+> and make sure `claude` is on your PATH, then come back."
+
+Stop here until this is confirmed.
 
 ## Step 1 — Check Python
 
@@ -59,7 +70,9 @@ Then run:
 .venv/bin/python setup/collect_profile.py
 ```
 
-Wait for the script to finish. Confirm `profile.yaml` was created.
+Wait for the script to finish. At the end it will ask whether to set up Gmail inbox
+(optional — lets the bot notify you of recruiter replies). The script handles this
+automatically; just answer the prompts. Confirm `profile.yaml` was created.
 
 ## Step 5 — Telegram bot
 

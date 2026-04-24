@@ -56,8 +56,11 @@ class AutoApplierBot:
         self._screenshot_dir = screenshot_dir
         self._gmail_inbox = gmail_inbox
 
-    def build_app(self) -> Application:
-        app = Application.builder().token(self._token).build()
+    def build_app(self, post_init=None) -> Application:
+        builder = Application.builder().token(self._token)
+        if post_init is not None:
+            builder = builder.post_init(post_init)
+        app = builder.build()
 
         # Store refs in bot_data for handler access
         app.bot_data["db"] = self._db
@@ -158,7 +161,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     context.user_data.pop(PENDING_JOB, None)
     context.user_data.pop(AWAITING_FIELD, None)
-    context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
+    context.bot_data.pop(AWAITING_EMAIL_REPLY, None)  # clears entire queue
     await update.message.reply_text("Cancelled.")
 
 
@@ -172,7 +175,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     registry: AdapterRegistry = context.bot_data["registry"]
 
     # Case 1a: waiting for a recruiter email reply from the user
-    # (stored in bot_data because background tasks can't access user_data)
+    # (stored as a queue in bot_data because background tasks can't access user_data)
     if context.bot_data.get(AWAITING_EMAIL_REPLY):
         await _handle_email_reply(update, context, text)
         return
@@ -354,8 +357,13 @@ async def _handle_email_reply(
     text: str,
 ) -> None:
     """Send user's reply to the recruiter, composing a professional scheduling
-    email via Claude when the thread is an interview request."""
-    thread: EmailThread = context.bot_data.pop(AWAITING_EMAIL_REPLY)
+    email via Claude when the thread is an interview or offer."""
+    queue: list = context.bot_data.get(AWAITING_EMAIL_REPLY, [])
+    if not queue:
+        return
+    thread: EmailThread = queue.pop(0)
+    if not queue:
+        context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
     inbox: GmailInbox | None = context.bot_data.get("gmail_inbox")
     db: ApplicationDB = context.bot_data["db"]
     profile: dict = context.bot_data["profile"]
@@ -387,12 +395,31 @@ async def _handle_email_reply(
             body=body,
         )
         # Echo what was sent so the user knows exactly what went out
-        await update.message.reply_text(
-            f"Sent to {thread.from_address}:\n\n{body}"
-        )
+        await update.message.reply_text(f"Sent to {thread.from_address}:\n\n{body}")
     except Exception as e:
         logger.error("Failed to send email reply: %s", e)
         await update.message.reply_text(f"Failed to send reply: {e}")
+
+    # If more emails are queued, prompt for the next one now
+    remaining: list = context.bot_data.get(AWAITING_EMAIL_REPLY, [])
+    if remaining:
+        next_thread = remaining[0]
+        next_category = classify_email(next_thread)
+        preview = next_thread.body_preview.strip()[:300]
+        if next_category == "offer":
+            prompt_line = "Tell me how you'd like to respond \u2014 accept, decline, or counter."
+            header = "\U0001f389 *Job offer*"
+        else:
+            prompt_line = "Share your availability and I'll write the reply."
+            header = "\U0001f4e8 *Interview request*"
+        await update.message.reply_text(
+            f"{header}\n\n"
+            f"*From:* {next_thread.from_address}\n"
+            f"*Subject:* {next_thread.subject}\n\n"
+            f"{preview}\n\n"
+            f"{prompt_line} Or /cancel to ignore.",
+            parse_mode="Markdown",
+        )
 
 
 async def _compose_offer_reply(
@@ -501,8 +528,9 @@ async def notify_new_emails(app: Application) -> None:
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
             await db.mark_email_notified(email_thread.id)
-            # Store thread so the next free-text message is treated as the reply
-            app.bot_data[AWAITING_EMAIL_REPLY] = email_thread
+            # Append to queue so multiple emails in one poll are all handled
+            queue: list = app.bot_data.setdefault(AWAITING_EMAIL_REPLY, [])
+            queue.append(email_thread)
         except Exception as e:
             logger.error("notify_new_emails: failed to send notification: %s", e)
 
