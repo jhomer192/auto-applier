@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
-"""
-Run by Claude Code during first-time setup.
-Asks the user questions and writes profile.yaml.
-"""
-import sys
+"""Run by Claude Code during first-time setup. Writes profile.yaml."""
 import yaml
 from pathlib import Path
 
 
 def ask(prompt: str, required: bool = False, multiline: bool = False) -> str:
+    nl = "\n"
     while True:
         if multiline:
-            print(f"{prompt} (type END on a blank line to finish):")
+            print(prompt + " (type END on a blank line to finish):")
             lines = []
             while True:
                 line = input()
                 if line.strip() == "END":
                     break
                 lines.append(line)
-            value = "
-".join(lines).strip()
+            value = nl.join(lines).strip()
         else:
-            value = input(f"{prompt}: ").strip()
-
+            value = input(prompt + ": ").strip()
         if value or not required:
             return value
         print("  (This field is required. Please enter a value.)")
@@ -31,22 +26,19 @@ def ask(prompt: str, required: bool = False, multiline: bool = False) -> str:
 def collect_work_history() -> list[dict]:
     history = []
     try:
-        count = int(input("How many jobs do you want to include (0 to skip)? ").strip() or "0")
+        count = int(input("How many jobs to include (0 to skip)? ").strip() or "0")
     except ValueError:
         count = 0
-
     for i in range(count):
-        print(f"
-Job {i+1}:")
+        print("")
+        print("Job " + str(i + 1) + ":")
         job = {
             "title": ask("  Job title", required=True),
             "company": ask("  Company name", required=True),
             "start": ask("  Start date (YYYY-MM)", required=True),
-            "end": ask("  End date (YYYY-MM) or 'present'"),
-            "description": ask("  Key responsibilities/achievements (bullet points)", multiline=True),
+            "end": ask("  End date (YYYY-MM) or present") or "present",
+            "description": ask("  Key responsibilities/achievements", multiline=True),
         }
-        if not job["end"]:
-            job["end"] = "present"
         history.append(job)
     return history
 
@@ -57,10 +49,9 @@ def collect_education() -> list[dict]:
         count = int(input("How many degrees to include (0 to skip)? ").strip() or "0")
     except ValueError:
         count = 0
-
     for i in range(count):
-        print(f"
-Degree {i+1}:")
+        print("")
+        print("Degree " + str(i + 1) + ":")
         edu = {
             "degree": ask("  Degree (e.g. B.S. Computer Science)", required=True),
             "school": ask("  School name", required=True),
@@ -71,16 +62,17 @@ Degree {i+1}:")
 
 
 def main() -> None:
-    print("=" * 60)
-    print("Auto Job Applier — Profile Setup")
-    print("=" * 60)
-    print("I'll ask you some questions to build your profile.")
-    print("This information will only ever be used exactly as you provide it.
-")
+    sep = "=" * 60
+    print(sep)
+    print("Auto Job Applier -- Profile Setup")
+    print(sep)
+    print("I will ask questions to build your job application profile.")
+    print("Your answers are used exactly as provided -- nothing is invented.")
+    print("")
 
     profile: dict = {}
 
-    print("── Basic Information ──")
+    print("-- Basic Information --")
     profile["name"] = ask("Full name", required=True)
     profile["email"] = ask("Email address", required=True)
     profile["phone"] = ask("Phone number", required=True)
@@ -88,47 +80,47 @@ def main() -> None:
 
     resume_path = ask("Absolute path to your resume PDF", required=True)
     while not Path(resume_path).exists():
-        print(f"  File not found: {resume_path}")
+        print("  File not found: " + resume_path)
         resume_path = ask("  Please enter a valid path", required=True)
     profile["resume_path"] = resume_path
 
-    print("
-── Professional Summary (optional) ──")
-    summary = ask("2-3 sentence professional summary (press Enter to skip)", multiline=False)
+    print("")
+    print("-- Professional Summary (optional) --")
+    summary = ask("2-3 sentence professional summary (Enter to skip)")
     if summary:
         profile["summary"] = summary
 
-    print("
-── Work History ──")
+    print("")
+    print("-- Work History --")
     profile["work_history"] = collect_work_history()
 
-    print("
-── Education ──")
+    print("")
+    print("-- Education --")
     profile["education"] = collect_education()
 
-    print("
-── Skills ──")
-    skills_raw = ask("List your top skills, comma-separated (e.g. Python, SQL, React)")
+    print("")
+    print("-- Skills --")
+    skills_raw = ask("Top skills, comma-separated (e.g. Python, SQL, React)")
     profile["skills"] = [s.strip() for s in skills_raw.split(",") if s.strip()]
 
-    print("
-── Online Profiles (optional) ──")
+    print("")
+    print("-- Online Profiles (optional) --")
     profile["links"] = {
-        "linkedin": ask("LinkedIn URL (press Enter to skip)"),
-        "github": ask("GitHub URL (press Enter to skip)"),
-        "portfolio": ask("Portfolio/personal site URL (press Enter to skip)"),
+        "linkedin": ask("LinkedIn URL (Enter to skip)"),
+        "github": ask("GitHub URL (Enter to skip)"),
+        "portfolio": ask("Portfolio/personal site URL (Enter to skip)"),
     }
 
-    print("
-── EEO Demographics (optional — only used for voluntary diversity forms) ──")
-    print("Press Enter to skip any of these.
-")
+    print("")
+    print("-- EEO Demographics (optional) --")
+    print("Press Enter to skip any of these.")
+    print("")
     profile["demographics"] = {
         "gender": ask("Gender"),
         "ethnicity": ask("Ethnicity"),
-        "veteran_status": ask("Veteran status (e.g. 'Not a veteran')"),
-        "disability_status": ask("Disability status (e.g. 'No disability')"),
-        "authorized_to_work": ask("Authorized to work in (e.g. 'US')"),
+        "veteran_status": ask("Veteran status (e.g. Not a veteran)"),
+        "disability_status": ask("Disability status (e.g. No disability)"),
+        "authorized_to_work": ask("Authorized to work in (e.g. US)"),
         "requires_sponsorship": ask("Requires visa sponsorship? (yes/no)").lower() in ("yes", "y"),
     }
 
@@ -136,9 +128,9 @@ def main() -> None:
     with open(output_path, "w") as f:
         yaml.dump(profile, f, default_flow_style=False, allow_unicode=True)
 
-    print(f"
-Profile saved to: {output_path.absolute()}")
-    print("You can edit profile.yaml directly at any time to update your information.")
+    print("")
+    print("Profile saved to: " + str(output_path.absolute()))
+    print("You can edit profile.yaml directly at any time.")
 
 
 if __name__ == "__main__":

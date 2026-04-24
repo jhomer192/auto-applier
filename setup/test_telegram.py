@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-Sends a test message to verify Telegram bot token and chat ID are correct.
-"""
+"""Sends a test message to verify Telegram bot token and chat ID are correct."""
 import asyncio
 import os
 import sys
@@ -24,21 +22,16 @@ async def main() -> None:
         await bot.send_message(
             chat_id=int(chat_id),
             text=(
-                "Setup complete! Your auto job applier is ready.
-
-"
-                "Send a job URL to apply:
-"
-                "• linkedin.com/jobs/view/...
-"
-                "• boards.greenhouse.io/...
-"
-                "• jobs.lever.co/..."
+                "Setup complete! Your auto job applier is ready.\n\n"
+                "Send a job URL to apply:\n"
+                "- linkedin.com/jobs/view/...\n"
+                "- boards.greenhouse.io/...\n"
+                "- jobs.lever.co/..."
             ),
         )
         print("Test message sent successfully!")
     except Exception as e:
-        print(f"ERROR: {e}")
+        print("ERROR: " + str(e))
         sys.exit(1)
 
 
