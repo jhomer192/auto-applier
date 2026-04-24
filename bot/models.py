@@ -13,6 +13,8 @@ class ApplicationRecord:
     screenshot_path: str | None = None
     applied_at: str | None = None
     notes: str = ""
+    cover_letter: str = ""
+    tailored_resume: str = ""
     id: int | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -65,6 +67,27 @@ class PendingJob:
     awaiting_fields: list[FormField] = field(default_factory=list)
     current_field_index: int = 0
     app_id: int | None = None
+    cover_letter: str = ""
+    tailored_resume: str = ""
+
+
+@dataclass
+class SavedSearch:
+    query: str
+    location: str = ""            # e.g. "San Francisco, CA" or ""
+    site: str = "linkedin"        # "linkedin" | "any"
+    active: bool = True
+    id: int | None = None
+    last_checked: str | None = None
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass
+class SearchResult:
+    title: str
+    company: str
+    url: str
+    search_id: int
 
 
 @dataclass

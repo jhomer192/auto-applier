@@ -9,7 +9,7 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
 from bot.profile import load_profile, ProfileError
-from bot.telegram_bot import AutoApplierBot, notify_new_emails
+from bot.telegram_bot import AutoApplierBot, notify_new_emails, notify_search_matches
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -17,7 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-INBOX_POLL_INTERVAL = 300  # seconds (5 minutes)
+INBOX_POLL_INTERVAL = 300   # seconds (5 minutes)
+SEARCH_POLL_INTERVAL = 1800  # seconds (30 minutes)
 
 
 async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:
@@ -35,6 +36,19 @@ async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:
         except Exception as e:
             logger.error("Inbox poll error: %s", e)
         await asyncio.sleep(INBOX_POLL_INTERVAL)
+
+
+async def _search_poll_loop(app, linkedin_auth: str) -> None:
+    """Background task: check saved job searches every SEARCH_POLL_INTERVAL seconds."""
+    logger.info("Search poller started (every %ds)", SEARCH_POLL_INTERVAL)
+    while True:
+        try:
+            await notify_search_matches(app, linkedin_auth)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("Search poll error: %s", e)
+        await asyncio.sleep(SEARCH_POLL_INTERVAL)
 
 
 def main() -> None:
@@ -79,12 +93,16 @@ def main() -> None:
         registry=registry,
         screenshot_dir=screenshot_dir,
         gmail_inbox=gmail_inbox,
+        profile_path=profile_path,
     )
 
-    post_init = None
-    if gmail_inbox:
-        async def _post_init(application) -> None:
-            asyncio.create_task(_inbox_poll_loop(application, gmail_inbox))
+    async def _post_init(application) -> None:
+        if gmail_inbox:
+            application.create_task(_inbox_poll_loop(application, gmail_inbox))
+        # Always start the search poller (it no-ops when there are no saved searches)
+        application.create_task(_search_poll_loop(application, linkedin_auth))
+
+    post_init = _post_init
 
     app = bot.build_app(post_init=post_init)
 

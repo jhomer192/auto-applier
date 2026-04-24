@@ -1,5 +1,5 @@
 import aiosqlite
-from bot.models import ApplicationRecord, EmailThread
+from bot.models import ApplicationRecord, EmailThread, SavedSearch
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS applications (
@@ -13,11 +13,35 @@ CREATE TABLE IF NOT EXISTS applications (
     screenshot_path TEXT,
     applied_at      TEXT,
     notes           TEXT NOT NULL DEFAULT '',
+    cover_letter    TEXT NOT NULL DEFAULT '',
+    tailored_resume TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 CREATE_IDX_STATUS = "CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);"
 CREATE_IDX_SITE = "CREATE INDEX IF NOT EXISTS idx_applications_site ON applications(site);"
+
+CREATE_SEARCHES_TABLE = """
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    query           TEXT NOT NULL,
+    location        TEXT NOT NULL DEFAULT '',
+    site            TEXT NOT NULL DEFAULT 'linkedin',
+    active          INTEGER NOT NULL DEFAULT 1,
+    last_checked    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+CREATE_SEEN_JOBS_TABLE = """
+CREATE TABLE IF NOT EXISTS seen_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL UNIQUE,
+    search_id   INTEGER REFERENCES saved_searches(id),
+    seen_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+CREATE_SEEN_JOBS_IDX = "CREATE INDEX IF NOT EXISTS idx_seen_jobs_url ON seen_jobs(url);"
 
 CREATE_EMAIL_TABLE = """
 CREATE TABLE IF NOT EXISTS email_threads (
@@ -47,6 +71,18 @@ class ApplicationDB:
             await db.execute(CREATE_IDX_SITE)
             await db.execute(CREATE_EMAIL_TABLE)
             await db.execute(CREATE_EMAIL_IDX)
+            await db.execute(CREATE_SEARCHES_TABLE)
+            await db.execute(CREATE_SEEN_JOBS_TABLE)
+            await db.execute(CREATE_SEEN_JOBS_IDX)
+            # Migrate existing DBs: add new columns if missing
+            for col, defn in [
+                ("cover_letter", "TEXT NOT NULL DEFAULT ''"),
+                ("tailored_resume", "TEXT NOT NULL DEFAULT ''"),
+            ]:
+                try:
+                    await db.execute(f"ALTER TABLE applications ADD COLUMN {col} {defn}")
+                except Exception:
+                    pass  # column already exists
             await db.commit()
 
     async def insert_application(self, app: ApplicationRecord) -> int:
@@ -54,11 +90,11 @@ class ApplicationDB:
             cursor = await db.execute(
                 """INSERT INTO applications
                    (url, title, company, site, status, submitted_fields,
-                    screenshot_path, applied_at, notes, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    screenshot_path, applied_at, notes, cover_letter, tailored_resume, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (app.url, app.title, app.company, app.site, app.status,
                  app.submitted_fields, app.screenshot_path, app.applied_at,
-                 app.notes, app.created_at),
+                 app.notes, app.cover_letter, app.tailored_resume, app.created_at),
             )
             await db.commit()
             return cursor.lastrowid
@@ -139,6 +175,79 @@ class ApplicationDB:
             )
             await db.commit()
 
+    # --- Saved searches ---
+
+    async def insert_search(self, search: "SavedSearch") -> int:
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                """INSERT INTO saved_searches (query, location, site, active, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (search.query, search.location, search.site, int(search.active), search.created_at),
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_active_searches(self) -> list["SavedSearch"]:
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM saved_searches WHERE active=1 ORDER BY created_at ASC"
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_search(row) for row in rows]
+
+    async def get_all_searches(self) -> list["SavedSearch"]:
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM saved_searches ORDER BY created_at ASC"
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_search(row) for row in rows]
+
+    async def deactivate_search(self, search_id: int) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute("UPDATE saved_searches SET active=0 WHERE id=?", (search_id,))
+            await db.commit()
+
+    async def touch_search(self, search_id: int, last_checked: str) -> None:
+        """Update the last_checked timestamp after a poll."""
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "UPDATE saved_searches SET last_checked=? WHERE id=?",
+                (last_checked, search_id),
+            )
+            await db.commit()
+
+    async def is_job_seen(self, url: str) -> bool:
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute("SELECT 1 FROM seen_jobs WHERE url=?", (url,))
+            return await cursor.fetchone() is not None
+
+    async def mark_job_seen(self, url: str, search_id: int) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO seen_jobs (url, search_id) VALUES (?,?)",
+                (url, search_id),
+            )
+            await db.commit()
+
+    async def save_cover_letter(self, app_id: int, cover_letter: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "UPDATE applications SET cover_letter=? WHERE id=?",
+                (cover_letter, app_id),
+            )
+            await db.commit()
+
+    async def save_tailored_resume(self, app_id: int, tailored_resume: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "UPDATE applications SET tailored_resume=? WHERE id=?",
+                (tailored_resume, app_id),
+            )
+            await db.commit()
+
 
 def _row_to_email(row: aiosqlite.Row) -> EmailThread:
     return EmailThread(
@@ -166,5 +275,20 @@ def _row_to_record(row: aiosqlite.Row) -> ApplicationRecord:
         screenshot_path=row["screenshot_path"],
         applied_at=row["applied_at"],
         notes=row["notes"],
+        cover_letter=row["cover_letter"] if "cover_letter" in row.keys() else "",
+        tailored_resume=row["tailored_resume"] if "tailored_resume" in row.keys() else "",
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_search(row: aiosqlite.Row) -> "SavedSearch":
+    from bot.models import SavedSearch
+    return SavedSearch(
+        id=row["id"],
+        query=row["query"],
+        location=row["location"],
+        site=row["site"],
+        active=bool(row["active"]),
+        last_checked=row["last_checked"],
         created_at=row["created_at"],
     )

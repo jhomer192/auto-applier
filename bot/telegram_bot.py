@@ -1,8 +1,11 @@
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
+import yaml
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -15,8 +18,8 @@ from telegram.ext import (
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import classify_email, GmailInbox
-from bot.llm import analyze_job, claude_call, generate_cover_letter, generate_field_answer, LLMError
-from bot.models import ApplicationRecord, EmailThread, PendingJob
+from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
+from bot.models import ApplicationRecord, EmailThread, PendingJob, SavedSearch
 from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,17 @@ logger = logging.getLogger(__name__)
 PENDING_JOB = "pending_job"
 AWAITING_FIELD = "awaiting_field"
 AWAITING_EMAIL_REPLY = "awaiting_email_reply"  # value: EmailThread
+
+# Profile interview state
+PROFILE_INTERVIEW = "profile_interview"   # value: {"step": int, "answers": [(q, a), ...]}
+
+# Profile interview questions
+_PROFILE_QUESTIONS = [
+    "What's your biggest career win so far? Walk me through what you did and what happened — metrics are gold (numbers, percentages, scale).",
+    "Any notable technical accomplishments? Systems you built or scaled, hard bugs you solved, tools others adopted?",
+    "What would a past manager say is your standout quality? Any specific situations that back that up?",
+    "Anything else worth capturing — side projects with traction, open source contributions, awards, things you're proud of that aren't on your resume yet?",
+]
 
 SUPPORTED_PATTERNS = [
     r"linkedin\.com/jobs/view/\d+",
@@ -47,6 +61,7 @@ class AutoApplierBot:
         registry: AdapterRegistry,
         screenshot_dir: str = "data/screenshots",
         gmail_inbox: GmailInbox | None = None,
+        profile_path: str = "profile.yaml",
     ) -> None:
         self._token = token
         self._chat_id = chat_id
@@ -55,6 +70,7 @@ class AutoApplierBot:
         self._registry = registry
         self._screenshot_dir = screenshot_dir
         self._gmail_inbox = gmail_inbox
+        self._profile_path = profile_path
 
     def build_app(self, post_init=None) -> Application:
         builder = Application.builder().token(self._token)
@@ -69,12 +85,17 @@ class AutoApplierBot:
         app.bot_data["authorized_user_id"] = self._chat_id
         app.bot_data["screenshot_dir"] = self._screenshot_dir
         app.bot_data["gmail_inbox"] = self._gmail_inbox
+        app.bot_data["profile_path"] = self._profile_path
 
         app.add_handler(CommandHandler("start", cmd_help))
         app.add_handler(CommandHandler("help", cmd_help))
         app.add_handler(CommandHandler("status", cmd_status))
         app.add_handler(CommandHandler("history", cmd_history))
         app.add_handler(CommandHandler("cancel", cmd_cancel))
+        app.add_handler(CommandHandler("search", cmd_search))
+        app.add_handler(CommandHandler("resume", cmd_resume))
+        app.add_handler(CommandHandler("coverletter", cmd_coverletter))
+        app.add_handler(CommandHandler("profile", cmd_profile))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -87,7 +108,7 @@ class AutoApplierBot:
 
 def _auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Return True only if message is from the authorized chat."""
-    return update.effective_user and update.effective_user.id == context.bot_data["authorized_user_id"]
+    return bool(update.effective_user and update.effective_user.id == context.bot_data["authorized_user_id"])
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,10 +120,18 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  \u2022 linkedin.com/jobs/view/...\n"
         "  \u2022 boards.greenhouse.io/...\n"
         "  \u2022 jobs.lever.co/...\n\n"
-        "Commands:\n"
+        "Application commands:\n"
         "/status \u2014 application counts\n"
         "/history [N] \u2014 last N applications (default 10)\n"
-        "/cancel \u2014 cancel pending application\n"
+        "/resume <id> \u2014 tailored resume for application\n"
+        "/coverletter <id> \u2014 cover letter for application\n"
+        "/cancel \u2014 cancel pending item\n\n"
+        "Job search commands:\n"
+        "/search add <query> [location] \u2014 save a search\n"
+        "/search list \u2014 list saved searches\n"
+        "/search rm <id> \u2014 remove a search\n\n"
+        "Profile commands:\n"
+        "/profile \u2014 add achievements to your profile\n\n"
         "/help \u2014 this message"
     )
 
@@ -159,10 +188,49 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _auth(update, context):
         return
-    context.user_data.pop(PENDING_JOB, None)
-    context.user_data.pop(AWAITING_FIELD, None)
-    context.bot_data.pop(AWAITING_EMAIL_REPLY, None)  # clears entire queue
-    await update.message.reply_text("Cancelled.")
+
+    if PENDING_JOB in context.user_data:
+        pending: PendingJob = context.user_data.pop(PENDING_JOB)
+        context.user_data.pop(AWAITING_FIELD, None)
+        title = pending.job_info.title
+        company = pending.job_info.company
+        await update.message.reply_text(f"Cancelled pending application for {title} at {company}.")
+
+    elif AWAITING_FIELD in context.user_data:
+        context.user_data.pop(AWAITING_FIELD, None)
+        await update.message.reply_text("Cancelled.")
+
+    elif context.bot_data.get(AWAITING_EMAIL_REPLY):
+        queue: list = context.bot_data[AWAITING_EMAIL_REPLY]
+        queue.pop(0)
+        if not queue:
+            context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
+            await update.message.reply_text("Dismissed.")
+        else:
+            next_thread: EmailThread = queue[0]
+            next_category = classify_email(next_thread)
+            preview = next_thread.body_preview.strip()[:300]
+            if next_category == "offer":
+                prompt_line = "Tell me how you'd like to respond \u2014 accept, decline, or counter."
+                header = "\U0001f389 *Job offer*"
+            else:
+                prompt_line = "Share your availability and I'll write the reply."
+                header = "\U0001f4e8 *Interview request*"
+            await update.message.reply_text(
+                f"{header}\n\n"
+                f"*From:* {next_thread.from_address}\n"
+                f"*Subject:* {next_thread.subject}\n\n"
+                f"{preview}\n\n"
+                f"{prompt_line} Or /cancel to ignore.",
+                parse_mode="Markdown",
+            )
+
+    elif context.user_data.get(PROFILE_INTERVIEW):
+        context.user_data.pop(PROFILE_INTERVIEW, None)
+        await update.message.reply_text("Profile interview cancelled. Nothing was saved.")
+
+    else:
+        await update.message.reply_text("Nothing to cancel.")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -180,7 +248,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _handle_email_reply(update, context, text)
         return
 
-    # Case 1b: we are waiting for a field answer from the user
+    # Case 1b: profile interview in progress
+    if context.user_data.get(PROFILE_INTERVIEW):
+        await _handle_profile_answer(update, context, text)
+        return
+
+    # Case 1c: we are waiting for a field answer from the user
     if context.user_data.get(AWAITING_FIELD):
         await _handle_field_answer(update, context, text)
         return
@@ -215,6 +288,237 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(
         "Send me a job URL (LinkedIn Easy Apply, Greenhouse, or Lever) to get started.\n/help for commands."
     )
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manage saved job searches.
+
+    /search add <query> [location] — save a new periodic search
+    /search list                   — show all saved searches
+    /search rm <id>                — deactivate a search
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    args = context.args or []
+
+    if not args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "/search add <query> [location] — e.g. /search add 'ML Engineer' 'San Francisco, CA'\n"
+            "/search list\n"
+            "/search rm <id>"
+        )
+        return
+
+    sub = args[0].lower()
+
+    if sub == "add":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /search add <query> [location]")
+            return
+        query = args[1]
+        location = " ".join(args[2:]) if len(args) > 2 else ""
+        search = SavedSearch(query=query, location=location)
+        search_id = await db.insert_search(search)
+        loc_str = f" in {location}" if location else ""
+        await update.message.reply_text(
+            f"Search saved (ID {search_id}): \"{query}\"{loc_str}\n"
+            "I'll check every 30 minutes and send you new matches."
+        )
+
+    elif sub == "list":
+        searches = await db.get_all_searches()
+        if not searches:
+            await update.message.reply_text("No saved searches.")
+            return
+        lines = ["Saved searches:"]
+        for s in searches:
+            status = "active" if s.active else "paused"
+            loc = f" | {s.location}" if s.location else ""
+            last = s.last_checked[:16].replace("T", " ") if s.last_checked else "never"
+            lines.append(f"[{s.id}] {s.query}{loc} — {status} — last checked: {last}")
+        await update.message.reply_text("\n".join(lines))
+
+    elif sub == "rm":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /search rm <id>")
+            return
+        try:
+            search_id = int(args[1])
+        except ValueError:
+            await update.message.reply_text("Search ID must be a number.")
+            return
+        await db.deactivate_search(search_id)
+        await update.message.reply_text(f"Search {search_id} deactivated.")
+
+    else:
+        await update.message.reply_text("Unknown subcommand. Use: add, list, or rm.")
+
+
+async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the tailored resume for a past application.
+
+    /resume <id>
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /resume <application id>")
+        return
+    try:
+        app_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("ID must be a number.")
+        return
+
+    record = await db.get_by_id(app_id)
+    if not record:
+        await update.message.reply_text(f"No application with ID {app_id}.")
+        return
+    if not record.tailored_resume:
+        await update.message.reply_text(
+            f"No tailored resume stored for application {app_id} "
+            f"({record.title} @ {record.company}).\n"
+            "Resume tailoring is generated for new applications going forward."
+        )
+        return
+    header = f"Tailored resume for [{app_id}] {record.title} @ {record.company}:\n\n"
+    await update.message.reply_text(header + record.tailored_resume)
+
+
+async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the cover letter for a past application.
+
+    /coverletter <id>
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /coverletter <application id>")
+        return
+    try:
+        app_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("ID must be a number.")
+        return
+
+    record = await db.get_by_id(app_id)
+    if not record:
+        await update.message.reply_text(f"No application with ID {app_id}.")
+        return
+    if not record.cover_letter:
+        await update.message.reply_text(
+            f"No cover letter stored for application {app_id} "
+            f"({record.title} @ {record.company}).\n"
+            "Cover letters are generated for new applications going forward."
+        )
+        return
+    header = f"Cover letter for [{app_id}] {record.title} @ {record.company}:\n\n"
+    await update.message.reply_text(header + record.cover_letter)
+
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start an achievement-mining interview to enrich the candidate profile."""
+    if not _auth(update, context):
+        return
+    if context.user_data.get(PROFILE_INTERVIEW):
+        await update.message.reply_text(
+            "Profile interview already in progress. Answer the question above, or /cancel to quit."
+        )
+        return
+    context.user_data[PROFILE_INTERVIEW] = {"step": 0, "answers": []}
+    await update.message.reply_text(
+        "Let's add some achievements to your profile. I'll ask 4 quick questions — "
+        "be as specific as you can. /cancel at any time to quit.\n\n"
+        f"*Question 1 of {len(_PROFILE_QUESTIONS)}:*\n{_PROFILE_QUESTIONS[0]}",
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_profile_answer(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    """Process one answer in the profile interview flow."""
+    state: dict = context.user_data[PROFILE_INTERVIEW]
+    step: int = state["step"]
+    answers: list = state["answers"]
+
+    answers.append((_PROFILE_QUESTIONS[step], text))
+    step += 1
+    state["step"] = step
+    state["answers"] = answers
+
+    if step < len(_PROFILE_QUESTIONS):
+        await update.message.reply_text(
+            f"*Question {step + 1} of {len(_PROFILE_QUESTIONS)}:*\n{_PROFILE_QUESTIONS[step]}",
+            parse_mode="Markdown",
+        )
+        return
+
+    # All questions answered — extract achievements
+    context.user_data.pop(PROFILE_INTERVIEW, None)
+    await update.message.reply_text("Extracting achievements from your answers...")
+
+    profile: dict = context.bot_data["profile"]
+    profile_path: str = context.bot_data["profile_path"]
+
+    try:
+        new_yaml = await extract_achievements(answers, profile)
+    except LLMError as e:
+        await update.message.reply_text(f"Could not extract achievements: {e}")
+        return
+
+    # Parse the returned YAML
+    try:
+        parsed = yaml.safe_load(new_yaml)
+        new_achievements = parsed.get("achievements", []) if isinstance(parsed, dict) else []
+    except yaml.YAMLError as e:
+        await update.message.reply_text(f"Could not parse extracted achievements: {e}\n\nRaw output:\n{new_yaml}")
+        return
+
+    if not new_achievements:
+        await update.message.reply_text(
+            "No new achievements could be extracted from your answers. "
+            "Nothing was saved. Try being more specific — include what you built, "
+            "the outcome, and any numbers."
+        )
+        return
+
+    # Show diff before writing
+    lines = ["Extracted achievements:"]
+    for ach in new_achievements:
+        lines.append(f"\n• {ach.get('summary', '')}")
+        if ach.get("impact"):
+            lines.append(f"  Impact: {ach['impact']}")
+        if ach.get("skills"):
+            lines.append(f"  Skills: {', '.join(ach['skills'])}")
+    lines.append("\nSaving to profile.yaml...")
+    await update.message.reply_text("\n".join(lines))
+
+    # Merge into profile.yaml
+    try:
+        with open(profile_path) as f:
+            current = yaml.safe_load(f) or {}
+        existing = current.get("achievements", [])
+        if not isinstance(existing, list):
+            existing = []
+        current["achievements"] = existing + new_achievements
+        with open(profile_path, "w") as f:
+            yaml.dump(current, f, default_flow_style=False, allow_unicode=True)
+        # Reload the live profile reference
+        context.bot_data["profile"] = current
+        await update.message.reply_text(
+            f"Profile updated — {len(new_achievements)} achievement(s) added."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Failed to save profile: {e}")
 
 
 async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
@@ -257,7 +561,7 @@ async def _proceed_with_application(
     registry: AdapterRegistry = context.bot_data["registry"]
     db: ApplicationDB = context.bot_data["db"]
 
-    await update.message.reply_text("Analyzing job and generating answers...")
+    await update.message.reply_text("Analyzing job and generating tailored materials...")
 
     # Analyze job
     try:
@@ -265,6 +569,33 @@ async def _proceed_with_application(
     except LLMError as e:
         await update.message.reply_text(f"LLM error during analysis: {e}")
         return
+
+    # Generate tailored resume (stored for later retrieval)
+    tailored_resume_text = ""
+    try:
+        tailored_resume_text = await tailor_resume(job_analysis, profile)
+    except LLMError as e:
+        logger.warning("tailor_resume failed: %s — continuing without it", e)
+
+    # Generate cover letter
+    cover_letter_text = ""
+    try:
+        cover_letter_text = await generate_cover_letter(job_analysis, profile)
+    except LLMError as e:
+        logger.warning("generate_cover_letter failed: %s", e)
+
+    # Store on pending so _submit_application can persist them
+    pending.cover_letter = cover_letter_text
+    pending.tailored_resume = tailored_resume_text
+
+    # Show cover letter preview + match score before proceeding
+    if cover_letter_text:
+        preview = cover_letter_text[:400] + ("..." if len(cover_letter_text) > 400 else "")
+        await update.message.reply_text(
+            f"Match score: *{job_analysis.match_score}/100*\n\n"
+            f"Cover letter preview:\n{preview}",
+            parse_mode="Markdown",
+        )
 
     # Generate field answers
     needs_user_input: list[int] = []
@@ -285,18 +616,14 @@ async def _proceed_with_application(
         except LLMError:
             needs_user_input.append(i)
 
-    # Generate cover letter and attach to first cover letter field
+    # Attach cover letter to first cover letter field
     cover_field_idx = next(
         (i for i, f in enumerate(pending.fields) if "cover" in f.label.lower()), None
     )
-    if cover_field_idx is not None and pending.fields[cover_field_idx].answer == "":
-        try:
-            cl = await generate_cover_letter(job_analysis, profile)
-            pending.fields[cover_field_idx].answer = cl
-            if cover_field_idx in needs_user_input:
-                needs_user_input.remove(cover_field_idx)
-        except LLMError:
-            pass
+    if cover_field_idx is not None and pending.fields[cover_field_idx].answer == "" and cover_letter_text:
+        pending.fields[cover_field_idx].answer = cover_letter_text
+        if cover_field_idx in needs_user_input:
+            needs_user_input.remove(cover_field_idx)
 
     if needs_user_input:
         # Store which fields still need user input
@@ -422,6 +749,17 @@ async def _handle_email_reply(
         )
 
 
+_EMAIL_INJECTION_MARKERS = ["CONSTRAINT:", "NEEDS_USER_INPUT", "PROFILE:", "FORM FIELD:"]
+
+
+def _sanitize_email_text(text: str) -> str:
+    """Strip prompt-injection markers from recruiter email content before it
+    enters an LLM prompt. Mirrors the sentinel check in llm._sanitize_profile."""
+    for marker in _EMAIL_INJECTION_MARKERS:
+        text = text.replace(marker, "[REDACTED]")
+    return text
+
+
 async def _compose_offer_reply(
     thread: EmailThread,
     user_input: str,
@@ -432,12 +770,13 @@ async def _compose_offer_reply(
     user_input is the user's intent: accept / decline / counter with details.
     """
     name = profile.get("name", "")
+    safe_body = _sanitize_email_text(thread.body_preview)
     prompt = (
         f"Write a short, professional reply to a job offer email.\n\n"
         f"OFFER EMAIL:\n"
         f"From: {thread.from_address}\n"
         f"Subject: {thread.subject}\n"
-        f"Message: {thread.body_preview}\n\n"
+        f"Message: {safe_body}\n\n"
         f"CANDIDATE NAME: {name}\n\n"
         f"CANDIDATE'S INTENT:\n{user_input}\n\n"
         "Write ONLY the email body (no subject line, no headers).\n"
@@ -462,12 +801,13 @@ async def _compose_scheduling_reply(
     Thursday morning, prefer video call'). Claude turns it into a polished email.
     """
     name = profile.get("name", "")
+    safe_body = _sanitize_email_text(thread.body_preview)
     prompt = (
         f"Write a short, professional reply to a recruiter interview request.\n\n"
         f"RECRUITER EMAIL:\n"
         f"From: {thread.from_address}\n"
         f"Subject: {thread.subject}\n"
-        f"Message: {thread.body_preview}\n\n"
+        f"Message: {safe_body}\n\n"
         f"CANDIDATE NAME: {name}\n\n"
         f"CANDIDATE'S AVAILABILITY / INTENT:\n{user_input}\n\n"
         "Write ONLY the email body (no subject line, no 'Subject:', no headers).\n"
@@ -535,6 +875,61 @@ async def notify_new_emails(app: Application) -> None:
             logger.error("notify_new_emails: failed to send notification: %s", e)
 
 
+async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
+    """Check saved searches for new job matches and send them to Telegram.
+
+    Called from the background search poll loop. For each active search, runs the
+    LinkedIn scraper, filters out already-seen URLs, and sends new matches as
+    individual Y/N prompts — identical to sending a URL manually.
+
+    Args:
+        app: The running PTB Application instance.
+        linkedin_auth: Path to LinkedIn auth state file.
+    """
+    from bot.search import search_linkedin
+    db: ApplicationDB = app.bot_data["db"]
+    chat_id: int = app.bot_data["authorized_user_id"]
+    bot = app.bot
+
+    searches = await db.get_active_searches()
+    if not searches:
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    for search in searches:
+        try:
+            results = await search_linkedin(search, auth_state_path=linkedin_auth)
+        except Exception as e:
+            logger.error("search poll error for %r: %s", search.query, e)
+            await db.touch_search(search.id, now)
+            continue
+
+        new_count = 0
+        for result in results:
+            if await db.is_job_seen(result.url):
+                continue
+            await db.mark_job_seen(result.url, search.id)
+            new_count += 1
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"\U0001f50d *Search match* — \"{search.query}\"\n\n"
+                        f"*{result.title}* at *{result.company}*\n"
+                        f"{result.url}\n\n"
+                        "Send the URL above to apply, or ignore."
+                    ),
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.error("notify_search_matches: send error: %s", e)
+
+        if new_count:
+            logger.info("search %r: sent %d new matches", search.query, new_count)
+        await db.touch_search(search.id, now)
+
+
 async def _submit_application(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -568,6 +963,8 @@ async def _submit_application(
         screenshot_path=result.screenshot_path,
         applied_at=datetime.now(timezone.utc).isoformat() if result.success else None,
         notes=result.error or "",
+        cover_letter=pending.cover_letter,
+        tailored_resume=pending.tailored_resume,
     )
     app_id = await db.insert_application(record)
 
@@ -585,9 +982,15 @@ async def _submit_application(
 
         # Field summary (cap at 15 fields)
         field_lines = [f"  {k}: {v[:80]}" for k, v in list(result.submitted_fields.items())[:15]]
+        extras = []
+        if record.tailored_resume:
+            extras.append(f"/resume {app_id}")
+        if record.cover_letter:
+            extras.append(f"/coverletter {app_id}")
+        extra_str = "\n\nRetrieve: " + " | ".join(extras) if extras else ""
         await update.message.reply_text(
             f"Application submitted! (ID: {app_id})\n\n"
-            "Submitted:\n" + "\n".join(field_lines)
+            "Submitted:\n" + "\n".join(field_lines) + extra_str
         )
     else:
         await update.message.reply_text(

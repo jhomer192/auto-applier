@@ -86,12 +86,15 @@ async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
         LLMError: If the CLI exits non-zero or returns empty output.
     """
     def _run() -> str:
-        result = subprocess.run(
-            ["claude", "-p", prompt],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                ["claude", "-p", prompt],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except FileNotFoundError:
+            raise LLMError("claude CLI not found — install it: npm install -g @anthropic-ai/claude-code")
         if result.returncode != 0:
             raise LLMError(
                 f"claude CLI failed (exit {result.returncode}): {result.stderr.strip()}"
@@ -204,6 +207,87 @@ async def generate_field_answer(
         "Answer:"
     )
     return await claude_call(prompt)
+
+
+async def tailor_resume(job_analysis: JobAnalysis, profile: dict) -> str:
+    """Generate a tailored resume in plain Markdown for a specific role.
+
+    Reorders and rephrases the candidate's real experience to best match the job,
+    emphasizing relevant skills and using ATS keywords. Never invents facts.
+
+    Args:
+        job_analysis: Analyzed job posting.
+        profile: Candidate profile dict.
+
+    Returns:
+        Markdown-formatted resume string tailored to this role.
+    """
+    safe_profile = _sanitize_profile(profile)
+    profile_str = yaml.dump(safe_profile, default_flow_style=False)
+    tailoring_context = _build_tailoring_context(job_analysis)
+
+    prompt = (
+        f"{GROUNDING_CONSTRAINT}\n\n"
+        f"{tailoring_context}\n"
+        f"PROFILE:\n{profile_str}\n\n"
+        "Generate a tailored resume in Markdown for this specific role. Follow these rules:\n"
+        "1. Start with the candidate's name and contact info (email, phone, location, LinkedIn/GitHub if present).\n"
+        "2. Write a 2-3 sentence Summary that connects the candidate's top experience to the role's key responsibilities.\n"
+        "   Use at least 2 ATS keywords. Match the company's tone.\n"
+        "3. Skills section: list only skills that appear in the profile AND are relevant to this role.\n"
+        "   Prioritize required_skills and preferred_skills from the job analysis.\n"
+        "4. Experience section: for each role in work_history, write 2-4 bullet points.\n"
+        "   Lead each bullet with an action verb. Include metrics where the profile states them.\n"
+        "   Emphasize bullets most relevant to this role's responsibilities.\n"
+        "5. Education section: include degree, institution, graduation year.\n"
+        "6. Only use facts from the profile. Do NOT invent metrics, titles, or responsibilities.\n"
+        "7. Keep total length under 700 words.\n\n"
+        "Tailored resume (Markdown):"
+    )
+    return await claude_call(prompt, max_tokens=1200)
+
+
+async def extract_achievements(answers: list[tuple[str, str]], profile: dict) -> str:
+    """Extract structured YAML achievement bullets from a profile interview.
+
+    Takes a list of (question, answer) pairs from the profile-building conversation
+    and returns new YAML entries ready to append to profile.yaml.
+
+    Args:
+        answers: List of (question, answer) tuples from the interview.
+        profile: Current profile dict (to avoid duplicating existing content).
+
+    Returns:
+        A YAML string with new `achievements` entries to merge into the profile.
+    """
+    safe_profile = _sanitize_profile(profile)
+    profile_str = yaml.dump(safe_profile, default_flow_style=False)
+
+    qa_block = "\n".join(
+        f"Q: {q}\nA: {a}" for q, a in answers
+    )
+
+    prompt = (
+        f"{GROUNDING_CONSTRAINT}\n\n"
+        "Below is a profile-building interview. Extract concrete achievements and add them "
+        "to the candidate's profile.\n\n"
+        f"CURRENT PROFILE:\n{profile_str}\n\n"
+        f"INTERVIEW:\n{qa_block}\n\n"
+        "Extract achievements from the interview answers. Output ONLY valid YAML with this structure:\n"
+        "achievements:\n"
+        "  - summary: <one-sentence achievement>\n"
+        "    impact: <quantified impact or qualitative outcome>\n"
+        "    skills: [<skill1>, <skill2>]\n"
+        "    context: <company or project name if mentioned>\n\n"
+        "Rules:\n"
+        "- Only extract facts explicitly stated in the interview answers.\n"
+        "- Do NOT duplicate achievements already in the profile.\n"
+        "- If no new achievements can be extracted, output: achievements: []\n"
+        "- Minimum 1 sentence, maximum 3 sentences per summary.\n"
+        "- Output ONLY the YAML block, no explanation.\n\n"
+        "YAML:"
+    )
+    return await claude_call(prompt, max_tokens=800)
 
 
 async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str:
