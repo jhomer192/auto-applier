@@ -15,7 +15,7 @@ from telegram.ext import (
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import classify_email, GmailInbox
-from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError
+from bot.llm import analyze_job, claude_call, generate_cover_letter, generate_field_answer, LLMError
 from bot.models import ApplicationRecord, EmailThread, PendingJob
 from bot.scraper import field_answer_hint
 
@@ -353,27 +353,69 @@ async def _handle_email_reply(
     context: ContextTypes.DEFAULT_TYPE,
     text: str,
 ) -> None:
-    """Send user's text as an email reply to the recruiter."""
+    """Send user's reply to the recruiter, composing a professional scheduling
+    email via Claude when the thread is an interview request."""
     thread: EmailThread = context.bot_data.pop(AWAITING_EMAIL_REPLY)
     inbox: GmailInbox | None = context.bot_data.get("gmail_inbox")
     db: ApplicationDB = context.bot_data["db"]
+    profile: dict = context.bot_data["profile"]
 
     if not inbox:
         await update.message.reply_text("Gmail not configured — reply not sent.")
         return
 
+    # For interview threads, use Claude to compose a professional scheduling reply
+    body = text
+    if classify_email(thread) == "interview":
+        await update.message.reply_text("Composing reply...")
+        try:
+            body = await _compose_scheduling_reply(thread, text, profile)
+        except LLMError as e:
+            logger.warning("Could not compose scheduling reply: %s — sending raw text", e)
+            body = text
+
     try:
-        await inbox.send_reply(thread, text)
+        await inbox.send_reply(thread, body)
         await db.insert_outbound_email(
             thread_id=thread.thread_id,
             to_address=thread.from_address,
             subject=thread.subject,
-            body=text,
+            body=body,
         )
-        await update.message.reply_text(f"Reply sent to {thread.from_address}.")
+        # Echo what was sent so the user knows exactly what went out
+        await update.message.reply_text(
+            f"Sent to {thread.from_address}:\n\n{body}"
+        )
     except Exception as e:
         logger.error("Failed to send email reply: %s", e)
         await update.message.reply_text(f"Failed to send reply: {e}")
+
+
+async def _compose_scheduling_reply(
+    thread: EmailThread,
+    user_input: str,
+    profile: dict,
+) -> str:
+    """Use Claude CLI to write a professional scheduling reply.
+
+    user_input is the user's raw availability / intent (e.g. 'Tuesday 2-4pm or
+    Thursday morning, prefer video call'). Claude turns it into a polished email.
+    """
+    name = profile.get("name", "")
+    prompt = (
+        f"Write a short, professional reply to a recruiter interview request.\n\n"
+        f"RECRUITER EMAIL:\n"
+        f"From: {thread.from_address}\n"
+        f"Subject: {thread.subject}\n"
+        f"Message: {thread.body_preview}\n\n"
+        f"CANDIDATE NAME: {name}\n\n"
+        f"CANDIDATE'S AVAILABILITY / INTENT:\n{user_input}\n\n"
+        "Write ONLY the email body (no subject line, no 'Subject:', no headers).\n"
+        "Keep it to 3-5 sentences. Be warm and professional.\n"
+        "Confirm interest in the role, share the availability exactly as given, "
+        "and close with a thank-you."
+    )
+    return await claude_call(prompt, max_tokens=400)
 
 
 async def notify_new_emails(app: Application) -> None:
@@ -406,7 +448,9 @@ async def notify_new_emails(app: Application) -> None:
             f"*From:* {email_thread.from_address}\n"
             f"*Subject:* {email_thread.subject}\n\n"
             f"{preview}\n\n"
-            f"Type your reply here, or /cancel to ignore."
+            f"Share your availability and I'll write the reply \u2014 e.g. "
+            f"\"Tuesday 2\u20135pm or Thursday morning, prefer video call\".\n"
+            f"Or type a full reply. /cancel to ignore."
         )
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
