@@ -14,7 +14,7 @@ from telegram.ext import (
 
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
-from bot.inbox import GmailInbox
+from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError
 from bot.models import ApplicationRecord, EmailThread, PendingJob
 from bot.scraper import field_answer_hint
@@ -389,9 +389,20 @@ async def notify_new_emails(app: Application) -> None:
 
     pending = await db.get_unnotified_emails()
     for email_thread in pending:
+        category = classify_email(email_thread)
+        logger.info(
+            "inbox: email from %s classified as %r (subject: %r)",
+            email_thread.from_address, category, email_thread.subject,
+        )
+
+        if category != "interview":
+            # Silently mark read — rejections and confirmations don't need a reply
+            await db.mark_email_notified(email_thread.id)
+            continue
+
         preview = email_thread.body_preview.strip()[:300]
         text = (
-            f"\U0001f4ec *New recruiter email*\n\n"
+            f"\U0001f4e8 *Interview request*\n\n"
             f"*From:* {email_thread.from_address}\n"
             f"*Subject:* {email_thread.subject}\n\n"
             f"{preview}\n\n"

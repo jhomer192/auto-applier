@@ -24,6 +24,59 @@ from bot.models import EmailThread
 logger = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
+
+# ── Email classification ──────────────────────────────────────────────────────
+
+_INTERVIEW_SIGNALS = [
+    "interview", "schedule", "availability", "time slot", "phone screen",
+    "video call", "zoom", "google meet", "teams call", "technical screen",
+    "next steps", "move forward", "moving forward", "like to connect",
+    "speak with you", "chat with you", "meet with you", "invite you",
+    "we'd love", "we would love", "excited to", "pleased to",
+]
+
+_REJECTION_SIGNALS = [
+    "unfortunately", "not moving forward", "will not be moving",
+    "other candidates", "not selected", "not a fit", "won't be moving",
+    "decided to", "position has been filled", "filled the position",
+    "not be continuing", "not be proceeding", "regret to inform",
+    "different direction", "not be able to move",
+]
+
+_CONFIRMATION_SIGNALS = [
+    "application received", "thank you for applying", "we received your application",
+    "successfully submitted", "your application has been", "application confirmation",
+    "we'll be in touch", "we will be in touch", "under review",
+    "being reviewed", "will review your",
+]
+
+
+def classify_email(thread: EmailThread) -> str:
+    """Classify an inbound email as 'interview', 'rejection', 'confirmation', or 'other'.
+
+    Uses keyword matching on subject + body preview. Fast, no LLM needed.
+    Returns 'interview' only when signals are unambiguous — false negatives
+    are better than notifying on noise.
+    """
+    text = (thread.subject + " " + thread.body_preview).lower()
+
+    rejection_hits = sum(1 for s in _REJECTION_SIGNALS if s in text)
+    confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text)
+    interview_hits = sum(1 for s in _INTERVIEW_SIGNALS if s in text)
+
+    # Explicit rejection wins over everything
+    if rejection_hits >= 1:
+        return "rejection"
+
+    # Automated confirmation (no human action needed)
+    if confirmation_hits >= 1 and interview_hits == 0:
+        return "confirmation"
+
+    # Interview: at least one signal, not drowned out by rejections
+    if interview_hits >= 1:
+        return "interview"
+
+    return "other"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
