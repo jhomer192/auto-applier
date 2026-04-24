@@ -364,14 +364,18 @@ async def _handle_email_reply(
         await update.message.reply_text("Gmail not configured — reply not sent.")
         return
 
-    # For interview threads, use Claude to compose a professional scheduling reply
+    # For interview/offer threads, use Claude to compose a professional reply
     body = text
-    if classify_email(thread) == "interview":
+    category = classify_email(thread)
+    if category in ("interview", "offer"):
         await update.message.reply_text("Composing reply...")
         try:
-            body = await _compose_scheduling_reply(thread, text, profile)
+            if category == "offer":
+                body = await _compose_offer_reply(thread, text, profile)
+            else:
+                body = await _compose_scheduling_reply(thread, text, profile)
         except LLMError as e:
-            logger.warning("Could not compose scheduling reply: %s — sending raw text", e)
+            logger.warning("Could not compose reply: %s — sending raw text", e)
             body = text
 
     try:
@@ -389,6 +393,35 @@ async def _handle_email_reply(
     except Exception as e:
         logger.error("Failed to send email reply: %s", e)
         await update.message.reply_text(f"Failed to send reply: {e}")
+
+
+async def _compose_offer_reply(
+    thread: EmailThread,
+    user_input: str,
+    profile: dict,
+) -> str:
+    """Use Claude CLI to write a professional offer response.
+
+    user_input is the user's intent: accept / decline / counter with details.
+    """
+    name = profile.get("name", "")
+    prompt = (
+        f"Write a short, professional reply to a job offer email.\n\n"
+        f"OFFER EMAIL:\n"
+        f"From: {thread.from_address}\n"
+        f"Subject: {thread.subject}\n"
+        f"Message: {thread.body_preview}\n\n"
+        f"CANDIDATE NAME: {name}\n\n"
+        f"CANDIDATE'S INTENT:\n{user_input}\n\n"
+        "Write ONLY the email body (no subject line, no headers).\n"
+        "Keep it to 3-5 sentences. Be warm and professional.\n"
+        "If accepting: express genuine enthusiasm and confirm any next steps.\n"
+        "If declining: be gracious and keep the door open.\n"
+        "If countering: state the counter clearly and professionally, "
+        "framing it as a question rather than a demand.\n"
+        "Use the candidate's intent exactly — do not invent details."
+    )
+    return await claude_call(prompt, max_tokens=400)
 
 
 async def _compose_scheduling_reply(
@@ -437,19 +470,32 @@ async def notify_new_emails(app: Application) -> None:
             email_thread.from_address, category, email_thread.subject,
         )
 
-        if category != "interview":
+        if category not in ("interview", "offer"):
             # Silently mark read — rejections and confirmations don't need a reply
             await db.mark_email_notified(email_thread.id)
             continue
 
         preview = email_thread.body_preview.strip()[:300]
+        if category == "offer":
+            prompt_line = (
+                "Tell me how you'd like to respond \u2014 accept, decline, or negotiate "
+                "(e.g. \"accept\" / \"decline\" / \"counter at $X, start date Y\") "
+                "and I'll write the reply."
+            )
+            header = "\U0001f389 *Job offer*"
+        else:
+            prompt_line = (
+                "Share your availability and I'll write the reply \u2014 e.g. "
+                "\"Tuesday 2\u20135pm or Thursday morning, prefer video call\"."
+            )
+            header = "\U0001f4e8 *Interview request*"
+
         text = (
-            f"\U0001f4e8 *Interview request*\n\n"
+            f"{header}\n\n"
             f"*From:* {email_thread.from_address}\n"
             f"*Subject:* {email_thread.subject}\n\n"
             f"{preview}\n\n"
-            f"Share your availability and I'll write the reply \u2014 e.g. "
-            f"\"Tuesday 2\u20135pm or Thursday morning, prefer video call\".\n"
+            f"{prompt_line}\n"
             f"Or type a full reply. /cancel to ignore."
         )
         try:

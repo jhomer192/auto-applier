@@ -14,6 +14,27 @@ def _make(subject: str, body: str = "") -> EmailThread:
     )
 
 
+# ── offer ────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("subject,body", [
+    ("We'd like to extend an offer", "Please find your offer letter attached"),
+    ("Job offer — Senior Engineer", "We are pleased to offer you the position"),
+    ("Your offer of employment", "compensation package and start date details"),
+    ("Offer letter from Acme Corp", "excited to offer you the role"),
+])
+def test_classify_offer(subject, body):
+    assert classify_email(_make(subject, body)) == "offer"
+
+
+def test_offer_beats_interview_signals():
+    # "schedule" is an interview signal but offer should win
+    email = _make(
+        "Offer letter — please confirm start date",
+        "We are pleased to offer you the position. Let's schedule an onboarding call.",
+    )
+    assert classify_email(email) == "offer"
+
+
 # ── interview ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("subject,body", [

@@ -24,8 +24,19 @@ from bot.models import EmailThread
 logger = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
+IMAP_PORT = 993
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
 
 # ── Email classification ──────────────────────────────────────────────────────
+
+_OFFER_SIGNALS = [
+    "offer letter", "job offer", "offer of employment", "formal offer",
+    "pleased to offer", "happy to offer", "excited to offer",
+    "offer you the position", "offer you the role", "offer you a position",
+    "compensation package", "salary offer", "start date",
+    "we'd like to extend", "we would like to extend",
+]
 
 _INTERVIEW_SIGNALS = [
     "interview", "schedule", "availability", "time slot", "phone screen",
@@ -52,35 +63,39 @@ _CONFIRMATION_SIGNALS = [
 
 
 def classify_email(thread: EmailThread) -> str:
-    """Classify an inbound email as 'interview', 'rejection', 'confirmation', or 'other'.
+    """Classify an inbound email as one of:
+      'offer', 'interview', 'rejection', 'confirmation', 'other'
 
     Uses keyword matching on subject + body preview. Fast, no LLM needed.
-    Returns 'interview' only when signals are unambiguous — false negatives
-    are better than notifying on noise.
+    Priority order: rejection > offer > interview > confirmation > other.
     """
     text = (thread.subject + " " + thread.body_preview).lower()
 
     rejection_hits = sum(1 for s in _REJECTION_SIGNALS if s in text)
-    confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text)
+    offer_hits = sum(1 for s in _OFFER_SIGNALS if s in text)
     interview_hits = sum(1 for s in _INTERVIEW_SIGNALS if s in text)
+    confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text)
 
     # Explicit rejection wins over everything
     if rejection_hits >= 1:
         return "rejection"
 
-    # Automated confirmation (no human action needed)
-    if confirmation_hits >= 1 and interview_hits == 0:
-        return "confirmation"
+    # Offer (more specific than interview — check first)
+    if offer_hits >= 1:
+        return "offer"
 
-    # Interview: at least one signal, not drowned out by rejections
+    # Interview
     if interview_hits >= 1:
         return "interview"
 
-    return "other"
-IMAP_PORT = 993
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+    # Automated confirmation (no human action needed)
+    if confirmation_hits >= 1:
+        return "confirmation"
 
+    return "other"
+
+
+# ── Header / body helpers ─────────────────────────────────────────────────────
 
 def _decode_header(value: str) -> str:
     """Decode an RFC 2047-encoded header value to a plain string."""
