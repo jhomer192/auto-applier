@@ -70,14 +70,14 @@ Save their answer as `BOT_TOKEN`.
 
 Save their answer as `CHAT_ID`.
 
-Copy `.env.example` to `.env` and fill in the values:
+Copy `.env.example` to `.env` and fill in the values using sed:
 ```bash
 cp .env.example .env
+sed -i "s|TELEGRAM_BOT_TOKEN=|TELEGRAM_BOT_TOKEN=<BOT_TOKEN>|" .env
+sed -i "s|TELEGRAM_CHAT_ID=|TELEGRAM_CHAT_ID=<CHAT_ID>|" .env
 ```
 
-Then replace the placeholder values in `.env`:
-- Set `TELEGRAM_BOT_TOKEN=<BOT_TOKEN>`
-- Set `TELEGRAM_CHAT_ID=<CHAT_ID>`
+Verify the `.env` file looks correct before continuing.
 
 ## Step 7 — LinkedIn login (optional)
 

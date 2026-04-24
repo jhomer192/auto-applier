@@ -1,7 +1,15 @@
+import logging
 import os
 
-from bot.models import JobInfo, FormField, ApplicationResult
+from bot.models import ApplicationResult, FormField, JobInfo
 from playwright.async_api import async_playwright
+
+logger = logging.getLogger(__name__)
+
+
+def _validate_resume(resume_path: str) -> None:
+    if not resume_path or not os.path.isfile(resume_path):
+        raise ValueError(f"Resume file not found: {resume_path!r}")
 
 
 class LeverAdapter:
@@ -9,7 +17,6 @@ class LeverAdapter:
     url_pattern = r"jobs\.lever\.co/.+"
 
     async def fetch_job_info(self, url: str) -> JobInfo:
-        """Fetch job title and company from a Lever job posting."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -37,7 +44,6 @@ class LeverAdapter:
             return JobInfo(title=title, company=company, url=url, raw_html=html)
 
     async def extract_fields(self, url: str) -> list[FormField]:
-        """Return the standard Lever application form fields."""
         return [
             FormField(label="Full Name", field_type="text", required=True, selector="input[name='name']"),
             FormField(label="Email", field_type="text", required=True, selector="input[name='email']"),
@@ -54,9 +60,10 @@ class LeverAdapter:
         fields: list[FormField],
         resume_path: str,
     ) -> ApplicationResult:
-        """Fill and submit a Lever application form."""
+        _validate_resume(resume_path)
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
+        job_slug = url.rstrip("/").split("/")[-1]
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -72,7 +79,7 @@ class LeverAdapter:
                     )
                     await page.wait_for_load_state("networkidle", timeout=10000)
                 except Exception:
-                    pass
+                    pass  # Form may already be visible
 
                 for field in fields:
                     if not field.answer:
@@ -84,17 +91,17 @@ class LeverAdapter:
                         elif field.field_type in ("text", "textarea"):
                             await page.fill(field.selector, field.answer)
                             submitted[field.label] = field.answer
-                    except Exception:
-                        pass
+                    except Exception as fill_err:
+                        logger.warning("Lever: could not fill %r (%s): %s", field.label, field.selector, fill_err)
 
                 os.makedirs("data/screenshots", exist_ok=True)
-                screenshot_path = f"data/screenshots/lever_{url.split(chr(47))[-1]}_pre.png"
+                screenshot_path = f"data/screenshots/lever_{job_slug}_pre.png"
                 await page.screenshot(path=screenshot_path)
 
                 await page.click("button[data-qa='btn-submit']", timeout=10000)
                 await page.wait_for_load_state("networkidle", timeout=15000)
 
-                screenshot_path = f"data/screenshots/lever_{url.split(chr(47))[-1]}_post.png"
+                screenshot_path = f"data/screenshots/lever_{job_slug}_post.png"
                 await page.screenshot(path=screenshot_path)
 
                 return ApplicationResult(
@@ -105,8 +112,9 @@ class LeverAdapter:
                 )
 
             except Exception as e:
-                err_shot = f"data/screenshots/lever_error_{url.split(chr(47))[-1]}.png"
+                logger.error("Lever submission failed: %s", e)
                 try:
+                    err_shot = f"data/screenshots/lever_error_{job_slug}.png"
                     await page.screenshot(path=err_shot)
                     screenshot_path = err_shot
                 except Exception:

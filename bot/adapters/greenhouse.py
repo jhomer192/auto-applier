@@ -1,6 +1,16 @@
-import re
-from bot.models import JobInfo, FormField, ApplicationResult
+import logging
+import os
+
+from bot.models import ApplicationResult, FormField, JobInfo
 from playwright.async_api import async_playwright
+
+logger = logging.getLogger(__name__)
+
+
+def _validate_resume(resume_path: str) -> None:
+    """Raise ValueError if resume_path does not point to an existing file."""
+    if not resume_path or not os.path.isfile(resume_path):
+        raise ValueError(f"Resume file not found: {resume_path!r}")
 
 
 class GreenhouseAdapter:
@@ -25,20 +35,7 @@ class GreenhouseAdapter:
             return JobInfo(title=title.strip(), company=company.strip(), url=url, raw_html=html)
 
     async def extract_fields(self, url: str) -> list[FormField]:
-        """Extract form fields from Greenhouse application form."""
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            app_url = (
-                url
-                if "/application" in url
-                else url + "/application"
-                if not url.endswith("/")
-                else url + "application"
-            )
-            await page.goto(app_url, wait_until="networkidle")
-            await browser.close()
-
+        """Return standard Greenhouse application fields (static — no browser needed)."""
         return [
             FormField(label="First Name", field_type="text", required=True, selector="#first_name"),
             FormField(label="Last Name", field_type="text", required=True, selector="#last_name"),
@@ -56,11 +53,10 @@ class GreenhouseAdapter:
         fields: list[FormField],
         resume_path: str,
     ) -> ApplicationResult:
-        """Fill and submit a Greenhouse application form."""
-        import os
-
+        _validate_resume(resume_path)
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
+        job_slug = url.rstrip("/").split("/")[-1]
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -83,17 +79,17 @@ class GreenhouseAdapter:
                         elif field.field_type == "select":
                             await page.select_option(field.selector, label=field.answer)
                             submitted[field.label] = field.answer
-                    except Exception:
-                        pass
+                    except Exception as fill_err:
+                        logger.warning("Greenhouse: could not fill %r (%s): %s", field.label, field.selector, fill_err)
 
                 os.makedirs("data/screenshots", exist_ok=True)
-                screenshot_path = f"data/screenshots/greenhouse_{url.split(chr(47))[-1]}_pre.png"
+                screenshot_path = f"data/screenshots/greenhouse_{job_slug}_pre.png"
                 await page.screenshot(path=screenshot_path)
 
                 await page.click("button[type='submit'], input[type='submit']")
                 await page.wait_for_load_state("networkidle", timeout=15000)
 
-                screenshot_path = f"data/screenshots/greenhouse_{url.split(chr(47))[-1]}_post.png"
+                screenshot_path = f"data/screenshots/greenhouse_{job_slug}_post.png"
                 await page.screenshot(path=screenshot_path)
 
                 return ApplicationResult(
@@ -104,8 +100,9 @@ class GreenhouseAdapter:
                 )
 
             except Exception as e:
-                err_shot = f"data/screenshots/greenhouse_error_{url.split(chr(47))[-1]}.png"
+                logger.error("Greenhouse submission failed: %s", e)
                 try:
+                    err_shot = f"data/screenshots/greenhouse_error_{job_slug}.png"
                     await page.screenshot(path=err_shot)
                     screenshot_path = err_shot
                 except Exception:

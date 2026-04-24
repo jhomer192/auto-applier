@@ -1,8 +1,7 @@
 import json
 import logging
-import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.ext import (
@@ -59,7 +58,7 @@ class AutoApplierBot:
         app.bot_data["db"] = self._db
         app.bot_data["profile"] = self._profile
         app.bot_data["registry"] = self._registry
-        app.bot_data["chat_id"] = self._chat_id
+        app.bot_data["authorized_user_id"] = self._chat_id
         app.bot_data["screenshot_dir"] = self._screenshot_dir
 
         app.add_handler(CommandHandler("start", cmd_help))
@@ -79,7 +78,7 @@ class AutoApplierBot:
 
 def _auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Return True only if message is from the authorized chat."""
-    return update.effective_user and update.effective_user.id == context.bot_data["chat_id"]
+    return update.effective_user and update.effective_user.id == context.bot_data["authorized_user_id"]
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,7 +362,7 @@ async def _submit_application(
         status="applied" if result.success else "failed",
         submitted_fields=submitted_json,
         screenshot_path=result.screenshot_path,
-        applied_at=datetime.utcnow().isoformat() if result.success else None,
+        applied_at=datetime.now(timezone.utc).isoformat() if result.success else None,
         notes=result.error or "",
     )
     app_id = await db.insert_application(record)
@@ -377,8 +376,8 @@ async def _submit_application(
             try:
                 with open(result.screenshot_path, "rb") as f:
                     await update.message.reply_photo(f)
-            except Exception:
-                pass
+            except Exception as photo_err:
+                logger.warning("Could not send screenshot %s: %s", result.screenshot_path, photo_err)
 
         # Field summary (cap at 15 fields)
         field_lines = [f"  {k}: {v[:80]}" for k, v in list(result.submitted_fields.items())[:15]]
