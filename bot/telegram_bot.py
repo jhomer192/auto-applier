@@ -257,7 +257,9 @@ async def _proceed_with_application(
             form_field.answer = profile.get("resume_path", "")
             continue
         try:
-            answer = await generate_field_answer(form_field.label, f"Job: {pending.job_info.title}", profile)
+            answer = await generate_field_answer(
+                form_field.label, f"Job: {pending.job_info.title}", profile, job_analysis
+            )
             if answer.startswith("NEEDS_USER_INPUT:"):
                 needs_user_input.append(i)
             else:

@@ -49,6 +49,12 @@ class JobAnalysis:
     company: str
     match_score: int  # 0-100
     tailored_summary: str
+    required_skills: list[str] = field(default_factory=list)
+    preferred_skills: list[str] = field(default_factory=list)
+    key_responsibilities: list[str] = field(default_factory=list)
+    company_tone: str = "formal"  # "formal" | "casual" | "mission-driven" | "technical"
+    ats_keywords: list[str] = field(default_factory=list)
+    why_this_role: str = ""
 
 
 @dataclass
