@@ -16,6 +16,7 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError
 from bot.models import ApplicationRecord, PendingJob
+from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +258,10 @@ async def _proceed_with_application(
             form_field.answer = profile.get("resume_path", "")
             continue
         try:
+            hint = field_answer_hint(form_field)
             answer = await generate_field_answer(
-                form_field.label, f"Job: {pending.job_info.title}", profile, job_analysis
+                form_field.label, f"Job: {pending.job_info.title}", profile, job_analysis,
+                field_hint=hint,
             )
             if answer.startswith("NEEDS_USER_INPUT:"):
                 needs_user_input.append(i)

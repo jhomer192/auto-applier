@@ -2,6 +2,7 @@ import logging
 import os
 
 from bot.models import ApplicationResult, FormField, JobInfo
+from bot.scraper import extract_fields_from_page
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
 logger = logging.getLogger(__name__)
@@ -57,12 +58,79 @@ class LinkedInAdapter:
                 await browser.close()
 
     async def extract_fields(self, url: str) -> list[FormField]:
-        """Return standard LinkedIn Easy Apply fields (static — modal is dynamic at submit time)."""
-        return [
-            FormField(label="Phone", field_type="text", required=False, selector="input[id*='phoneNumber']"),
-            FormField(label="Resume", field_type="file", required=True, selector="input[name='file']"),
-            FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[id*='coverLetter']"),
-        ]
+        """Open the Easy Apply modal and scrape fields from each step.
+
+        LinkedIn Easy Apply is multi-step — we click through all steps, scraping
+        fields from each, then close without submitting. Returns the complete
+        ordered field list across all steps.
+        """
+        from playwright_stealth import stealth_async
+
+        async with async_playwright() as p:
+            browser, ctx = await self._get_context(p)
+            page = await ctx.new_page()
+            try:
+                await stealth_async(page)
+                await page.goto(url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2000)
+
+                # Open Easy Apply modal
+                apply_btn = page.locator("button.jobs-apply-button")
+                if await apply_btn.count() == 0:
+                    logger.warning("LinkedIn: Easy Apply button not found, using static fallback")
+                    return _static_fallback()
+
+                await apply_btn.first.click()
+                await page.wait_for_timeout(1500)
+
+                all_fields: list[FormField] = []
+                seen_labels: set[str] = set()
+                max_steps = 15
+
+                for step in range(max_steps):
+                    # Scrape visible fields on this step
+                    step_fields = await extract_fields_from_page(page)
+                    for f in step_fields:
+                        key = f"{f.label}|{f.field_type}"
+                        if key not in seen_labels:
+                            seen_labels.add(key)
+                            all_fields.append(f)
+
+                    # Check for Submit button — end of flow
+                    submit_btn = page.locator(
+                        "button[aria-label*='Submit'], button:has-text('Submit application')"
+                    )
+                    if await submit_btn.count() > 0:
+                        logger.info("LinkedIn: reached Submit on step %d, total fields: %d", step + 1, len(all_fields))
+                        break
+
+                    # Advance to next step
+                    next_btn = page.locator(
+                        "button[aria-label*='Continue'], button:has-text('Next')"
+                    )
+                    if await next_btn.count() > 0:
+                        await next_btn.first.click()
+                        await page.wait_for_timeout(1000)
+                    else:
+                        logger.warning("LinkedIn: no Next or Submit found at step %d", step + 1)
+                        break
+
+                # Dismiss modal
+                try:
+                    dismiss = page.locator("button[aria-label='Dismiss']")
+                    if await dismiss.count() > 0:
+                        await dismiss.first.click()
+                except Exception:
+                    pass
+
+                logger.info("LinkedIn: scraped %d unique fields across all steps", len(all_fields))
+                return all_fields if all_fields else _static_fallback()
+
+            except Exception as e:
+                logger.warning("LinkedIn: field extraction failed (%s), using static fallback", e)
+                return _static_fallback()
+            finally:
+                await browser.close()
 
     async def submit_application(
         self,
@@ -70,13 +138,14 @@ class LinkedInAdapter:
         fields: list[FormField],
         resume_path: str,
     ) -> ApplicationResult:
-        """Step through the LinkedIn Easy Apply modal and submit."""
+        """Step through the Easy Apply modal, filling fields at each step."""
         _validate_resume(resume_path)
         from playwright_stealth import stealth_async
 
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
-        submitted_flag = False  # track whether Submit button was actually clicked
+        submitted_flag = False
+        job_id = url.rstrip("/").split("/")[-1]
 
         async with async_playwright() as p:
             browser, ctx = await self._get_context(p)
@@ -91,31 +160,41 @@ class LinkedInAdapter:
                 await page.wait_for_timeout(1500)
 
                 os.makedirs("data/screenshots", exist_ok=True)
-                job_id = url.rstrip("/").split("/")[-1]
 
-                max_steps = 10
+                # Build label → field lookup for fast matching
+                field_by_label = {f.label.lower(): f for f in fields}
+
+                max_steps = 15
                 for _step in range(max_steps):
-                    # Fill phone if visible
-                    try:
-                        phone_input = page.locator("input[id*='phoneNumber']")
-                        if await phone_input.count() > 0:
-                            phone_field = next((f for f in fields if f.label == "Phone"), None)
-                            if phone_field and phone_field.answer and "Phone" not in submitted:
-                                await phone_input.fill(phone_field.answer)
-                                submitted["Phone"] = phone_field.answer
-                    except Exception as e:
-                        logger.warning("LinkedIn: could not fill Phone: %s", e)
+                    # Fill all visible fields on this step
+                    step_fields = await extract_fields_from_page(page)
+                    for visible_field in step_fields:
+                        match = field_by_label.get(visible_field.label.lower())
+                        answer = match.answer if match else ""
+                        if not answer:
+                            continue
+                        try:
+                            if visible_field.field_type == "file":
+                                file_input = page.locator(visible_field.selector)
+                                if await file_input.count() > 0 and visible_field.label not in submitted:
+                                    await file_input.set_input_files(resume_path)
+                                    submitted[visible_field.label] = resume_path
+                            elif visible_field.field_type in ("text", "textarea"):
+                                await page.fill(visible_field.selector, answer)
+                                submitted[visible_field.label] = answer
+                            elif visible_field.field_type == "select":
+                                await page.select_option(visible_field.selector, label=answer)
+                                submitted[visible_field.label] = answer
+                            elif visible_field.field_type == "checkbox":
+                                should_check = answer.lower() in ("yes", "true", "1")
+                                is_checked = await page.is_checked(visible_field.selector)
+                                if should_check and not is_checked:
+                                    await page.check(visible_field.selector)
+                                submitted[visible_field.label] = answer
+                        except Exception as fill_err:
+                            logger.warning("LinkedIn: could not fill %r: %s", visible_field.label, fill_err)
 
-                    # Upload resume if file input is visible
-                    try:
-                        file_input = page.locator("input[type='file']")
-                        if await file_input.count() > 0 and "Resume" not in submitted:
-                            await file_input.set_input_files(resume_path)
-                            submitted["Resume"] = resume_path
-                    except Exception as e:
-                        logger.warning("LinkedIn: could not upload resume: %s", e)
-
-                    await page.wait_for_timeout(500)
+                    await page.wait_for_timeout(300)
 
                     # Check for Submit button
                     submit_btn = page.locator(
@@ -124,22 +203,21 @@ class LinkedInAdapter:
                     if await submit_btn.count() > 0:
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_pre.png"
                         await page.screenshot(path=screenshot_path)
-                        await submit_btn.click()
+                        await submit_btn.first.click()
                         await page.wait_for_timeout(3000)
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_post.png"
                         await page.screenshot(path=screenshot_path)
                         submitted_flag = True
                         break
 
-                    # Advance to next step
+                    # Advance
                     next_btn = page.locator(
                         "button[aria-label*='Continue'], button:has-text('Next')"
                     )
                     if await next_btn.count() > 0:
-                        await next_btn.click()
+                        await next_btn.first.click()
                         await page.wait_for_timeout(1000)
                     else:
-                        # No Next and no Submit — modal is in an unexpected state
                         break
 
                 if not submitted_flag:
@@ -147,7 +225,7 @@ class LinkedInAdapter:
                         success=False,
                         screenshot_path=screenshot_path,
                         submitted_fields=submitted,
-                        error="Submit button was never found after stepping through the Easy Apply modal.",
+                        error="Submit button was never reached after stepping through the Easy Apply modal.",
                     )
 
                 return ApplicationResult(
@@ -160,7 +238,7 @@ class LinkedInAdapter:
             except Exception as e:
                 logger.error("LinkedIn submission failed: %s", e)
                 try:
-                    err_shot = f"data/screenshots/linkedin_error_{job_id if 'job_id' in dir() else 'unknown'}.png"
+                    err_shot = f"data/screenshots/linkedin_error_{job_id}.png"
                     await page.screenshot(path=err_shot)
                     screenshot_path = err_shot
                 except Exception:
@@ -173,3 +251,11 @@ class LinkedInAdapter:
                 )
             finally:
                 await browser.close()
+
+
+def _static_fallback() -> list[FormField]:
+    return [
+        FormField(label="Phone", field_type="text", required=False, selector="input[id*='phoneNumber']"),
+        FormField(label="Resume", field_type="file", required=True, selector="input[name='file']"),
+        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[id*='coverLetter']"),
+    ]

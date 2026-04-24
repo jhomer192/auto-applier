@@ -2,13 +2,13 @@ import logging
 import os
 
 from bot.models import ApplicationResult, FormField, JobInfo
+from bot.scraper import extract_fields_from_page
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
 
 def _validate_resume(resume_path: str) -> None:
-    """Raise ValueError if resume_path does not point to an existing file."""
     if not resume_path or not os.path.isfile(resume_path):
         raise ValueError(f"Resume file not found: {resume_path!r}")
 
@@ -35,17 +35,24 @@ class GreenhouseAdapter:
             return JobInfo(title=title.strip(), company=company.strip(), url=url, raw_html=html)
 
     async def extract_fields(self, url: str) -> list[FormField]:
-        """Return standard Greenhouse application fields (static — no browser needed)."""
-        return [
-            FormField(label="First Name", field_type="text", required=True, selector="#first_name"),
-            FormField(label="Last Name", field_type="text", required=True, selector="#last_name"),
-            FormField(label="Email", field_type="text", required=True, selector="#email"),
-            FormField(label="Phone", field_type="text", required=True, selector="#phone"),
-            FormField(label="Resume", field_type="file", required=True, selector="input[name='resume']"),
-            FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='cover_letter']"),
-            FormField(label="LinkedIn Profile", field_type="text", required=False, selector="input[id*='linkedin']"),
-            FormField(label="Website", field_type="text", required=False, selector="input[id*='website']"),
-        ]
+        """Dynamically scrape all fields from the Greenhouse application form."""
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                # Greenhouse application pages are at /application suffix
+                app_url = url if "/application" in url else url.rstrip("/") + "/application"
+                await page.goto(app_url, wait_until="networkidle")
+                await page.wait_for_timeout(1000)
+
+                fields = await extract_fields_from_page(page)
+                logger.info("Greenhouse: scraped %d fields from %s", len(fields), app_url)
+                return fields
+            except Exception as e:
+                logger.warning("Greenhouse: dynamic extraction failed (%s), using static fallback", e)
+                return _static_fallback()
+            finally:
+                await browser.close()
 
     async def submit_application(
         self,
@@ -65,6 +72,7 @@ class GreenhouseAdapter:
             try:
                 app_url = url if "/application" in url else url.rstrip("/") + "/application"
                 await page.goto(app_url, wait_until="networkidle")
+                await page.wait_for_timeout(500)
 
                 for field in fields:
                     if not field.answer:
@@ -78,6 +86,14 @@ class GreenhouseAdapter:
                             submitted[field.label] = field.answer
                         elif field.field_type == "select":
                             await page.select_option(field.selector, label=field.answer)
+                            submitted[field.label] = field.answer
+                        elif field.field_type == "checkbox":
+                            should_check = field.answer.lower() in ("yes", "true", "1", "checked")
+                            is_checked = await page.is_checked(field.selector)
+                            if should_check and not is_checked:
+                                await page.check(field.selector)
+                            elif not should_check and is_checked:
+                                await page.uncheck(field.selector)
                             submitted[field.label] = field.answer
                     except Exception as fill_err:
                         logger.warning("Greenhouse: could not fill %r (%s): %s", field.label, field.selector, fill_err)
@@ -115,3 +131,16 @@ class GreenhouseAdapter:
                 )
             finally:
                 await browser.close()
+
+
+def _static_fallback() -> list[FormField]:
+    """Minimal static field list used if dynamic scraping fails."""
+    return [
+        FormField(label="First Name", field_type="text", required=True, selector="#first_name"),
+        FormField(label="Last Name", field_type="text", required=True, selector="#last_name"),
+        FormField(label="Email", field_type="text", required=True, selector="#email"),
+        FormField(label="Phone", field_type="text", required=True, selector="#phone"),
+        FormField(label="Resume", field_type="file", required=True, selector="input[name='resume']"),
+        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='cover_letter']"),
+        FormField(label="LinkedIn Profile", field_type="text", required=False, selector="input[id*='linkedin']"),
+    ]

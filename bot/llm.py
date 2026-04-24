@@ -158,6 +158,7 @@ async def generate_field_answer(
     field_context: str,
     profile: dict,
     job_analysis: JobAnalysis | None = None,
+    field_hint: str | None = None,
 ) -> str:
     """Generate an answer for a single form field using the candidate profile.
 
@@ -169,6 +170,8 @@ async def generate_field_answer(
         field_context: Surrounding form text for additional context.
         profile: Candidate profile dict.
         job_analysis: Optional analyzed job posting for tailoring. Defaults to None.
+        field_hint: Optional type-specific instruction (e.g., valid dropdown options,
+            EEO guidance) from the scraper. Prepended to the prompt if provided.
 
     Returns:
         Answer string, or 'NEEDS_USER_INPUT:<field_label>' if profile is insufficient.
@@ -185,9 +188,12 @@ async def generate_field_answer(
             "Choose which profile facts to highlight based on the key responsibilities above.\n"
         )
 
+    hint_block = f"\nFIELD GUIDANCE: {field_hint}\n" if field_hint else ""
+
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n"
-        f"{tailoring_block}\n"
+        f"{tailoring_block}"
+        f"{hint_block}\n"
         f"PROFILE:\n{profile_str}\n\n"
         f"FORM FIELD: {field_label}\n"
         f"CONTEXT (surrounding form text): {field_context}\n\n"

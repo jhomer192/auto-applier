@@ -2,6 +2,7 @@ import logging
 import os
 
 from bot.models import ApplicationResult, FormField, JobInfo
+from bot.scraper import extract_fields_from_page
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -29,30 +30,49 @@ class LeverAdapter:
                 title = await page.title()
 
             try:
-                company = await page.text_content(".main-header-logo img") or ""
-                if not company:
-                    company = (
-                        url.split("jobs.lever.co/")[-1].split("/")[0].replace("-", " ").title()
-                    )
+                company_slug = url.split("jobs.lever.co/")[-1].split("/")[0]
+                company = company_slug.replace("-", " ").title()
             except Exception:
-                company = (
-                    url.split("jobs.lever.co/")[-1].split("/")[0].replace("-", " ").title()
-                )
+                company = ""
 
             html = await page.content()
             await browser.close()
             return JobInfo(title=title, company=company, url=url, raw_html=html)
 
     async def extract_fields(self, url: str) -> list[FormField]:
-        return [
-            FormField(label="Full Name", field_type="text", required=True, selector="input[name='name']"),
-            FormField(label="Email", field_type="text", required=True, selector="input[name='email']"),
-            FormField(label="Phone", field_type="text", required=False, selector="input[name='phone']"),
-            FormField(label="Current Company", field_type="text", required=False, selector="input[name='org']"),
-            FormField(label="LinkedIn", field_type="text", required=False, selector="input[name='urls[LinkedIn]']"),
-            FormField(label="Resume", field_type="file", required=True, selector="input[data-qa='resume-upload-input']"),
-            FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='comments']"),
-        ]
+        """Dynamically scrape all fields from the Lever application form."""
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.goto(url, wait_until="networkidle")
+                await page.wait_for_timeout(1000)
+
+                # Click Apply button to reveal the form
+                for apply_selector in [
+                    "a[data-qa='btn-apply-bottom']",
+                    "a[data-qa='btn-apply']",
+                    "a.template-btn-submit",
+                    "a:has-text('Apply')",
+                ]:
+                    try:
+                        btn = page.locator(apply_selector)
+                        if await btn.count() > 0:
+                            await btn.first.click()
+                            await page.wait_for_load_state("networkidle", timeout=10000)
+                            await page.wait_for_timeout(1000)
+                            break
+                    except Exception:
+                        pass
+
+                fields = await extract_fields_from_page(page)
+                logger.info("Lever: scraped %d fields from %s", len(fields), url)
+                return fields
+            except Exception as e:
+                logger.warning("Lever: dynamic extraction failed (%s), using static fallback", e)
+                return _static_fallback()
+            finally:
+                await browser.close()
 
     async def submit_application(
         self,
@@ -71,15 +91,23 @@ class LeverAdapter:
 
             try:
                 await page.goto(url, wait_until="networkidle")
+                await page.wait_for_timeout(1000)
 
-                try:
-                    await page.click(
-                        "a[data-qa='btn-apply-bottom'], a.template-btn-submit",
-                        timeout=5000,
-                    )
-                    await page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass  # Form may already be visible
+                # Click Apply to open form
+                for apply_selector in [
+                    "a[data-qa='btn-apply-bottom']",
+                    "a[data-qa='btn-apply']",
+                    "a.template-btn-submit",
+                ]:
+                    try:
+                        btn = page.locator(apply_selector)
+                        if await btn.count() > 0:
+                            await btn.first.click()
+                            await page.wait_for_load_state("networkidle", timeout=10000)
+                            await page.wait_for_timeout(500)
+                            break
+                    except Exception:
+                        pass
 
                 for field in fields:
                     if not field.answer:
@@ -90,6 +118,15 @@ class LeverAdapter:
                             submitted[field.label] = resume_path
                         elif field.field_type in ("text", "textarea"):
                             await page.fill(field.selector, field.answer)
+                            submitted[field.label] = field.answer
+                        elif field.field_type == "select":
+                            await page.select_option(field.selector, label=field.answer)
+                            submitted[field.label] = field.answer
+                        elif field.field_type == "checkbox":
+                            should_check = field.answer.lower() in ("yes", "true", "1", "checked")
+                            is_checked = await page.is_checked(field.selector)
+                            if should_check and not is_checked:
+                                await page.check(field.selector)
                             submitted[field.label] = field.answer
                     except Exception as fill_err:
                         logger.warning("Lever: could not fill %r (%s): %s", field.label, field.selector, fill_err)
@@ -127,3 +164,15 @@ class LeverAdapter:
                 )
             finally:
                 await browser.close()
+
+
+def _static_fallback() -> list[FormField]:
+    return [
+        FormField(label="Full Name", field_type="text", required=True, selector="input[name='name']"),
+        FormField(label="Email", field_type="text", required=True, selector="input[name='email']"),
+        FormField(label="Phone", field_type="text", required=False, selector="input[name='phone']"),
+        FormField(label="Current Company", field_type="text", required=False, selector="input[name='org']"),
+        FormField(label="LinkedIn", field_type="text", required=False, selector="input[name='urls[LinkedIn]']"),
+        FormField(label="Resume", field_type="file", required=True, selector="input[data-qa='resume-upload-input']"),
+        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='comments']"),
+    ]
