@@ -14,8 +14,9 @@ from telegram.ext import (
 
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
+from bot.inbox import GmailInbox
 from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError
-from bot.models import ApplicationRecord, PendingJob
+from bot.models import ApplicationRecord, EmailThread, PendingJob
 from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Conversation state keys stored in context.user_data
 PENDING_JOB = "pending_job"
 AWAITING_FIELD = "awaiting_field"
+AWAITING_EMAIL_REPLY = "awaiting_email_reply"  # value: EmailThread
 
 SUPPORTED_PATTERNS = [
     r"linkedin\.com/jobs/view/\d+",
@@ -44,6 +46,7 @@ class AutoApplierBot:
         profile: dict,
         registry: AdapterRegistry,
         screenshot_dir: str = "data/screenshots",
+        gmail_inbox: GmailInbox | None = None,
     ) -> None:
         self._token = token
         self._chat_id = chat_id
@@ -51,6 +54,7 @@ class AutoApplierBot:
         self._profile = profile
         self._registry = registry
         self._screenshot_dir = screenshot_dir
+        self._gmail_inbox = gmail_inbox
 
     def build_app(self) -> Application:
         app = Application.builder().token(self._token).build()
@@ -61,6 +65,7 @@ class AutoApplierBot:
         app.bot_data["registry"] = self._registry
         app.bot_data["authorized_user_id"] = self._chat_id
         app.bot_data["screenshot_dir"] = self._screenshot_dir
+        app.bot_data["gmail_inbox"] = self._gmail_inbox
 
         app.add_handler(CommandHandler("start", cmd_help))
         app.add_handler(CommandHandler("help", cmd_help))
@@ -153,6 +158,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     context.user_data.pop(PENDING_JOB, None)
     context.user_data.pop(AWAITING_FIELD, None)
+    context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
     await update.message.reply_text("Cancelled.")
 
 
@@ -165,7 +171,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     profile: dict = context.bot_data["profile"]
     registry: AdapterRegistry = context.bot_data["registry"]
 
-    # Case 1: we are waiting for a field answer from the user
+    # Case 1a: waiting for a recruiter email reply from the user
+    # (stored in bot_data because background tasks can't access user_data)
+    if context.bot_data.get(AWAITING_EMAIL_REPLY):
+        await _handle_email_reply(update, context, text)
+        return
+
+    # Case 1b: we are waiting for a field answer from the user
     if context.user_data.get(AWAITING_FIELD):
         await _handle_field_answer(update, context, text)
         return
@@ -334,6 +346,64 @@ async def _handle_field_answer(
     # All user-provided fields answered — submit
     context.user_data.pop(AWAITING_FIELD, None)
     await _submit_application(update, context, pending)
+
+
+async def _handle_email_reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    """Send user's text as an email reply to the recruiter."""
+    thread: EmailThread = context.bot_data.pop(AWAITING_EMAIL_REPLY)
+    inbox: GmailInbox | None = context.bot_data.get("gmail_inbox")
+    db: ApplicationDB = context.bot_data["db"]
+
+    if not inbox:
+        await update.message.reply_text("Gmail not configured — reply not sent.")
+        return
+
+    try:
+        await inbox.send_reply(thread, text)
+        await db.insert_outbound_email(
+            thread_id=thread.thread_id,
+            to_address=thread.from_address,
+            subject=thread.subject,
+            body=text,
+        )
+        await update.message.reply_text(f"Reply sent to {thread.from_address}.")
+    except Exception as e:
+        logger.error("Failed to send email reply: %s", e)
+        await update.message.reply_text(f"Failed to send reply: {e}")
+
+
+async def notify_new_emails(app: Application) -> None:
+    """Called from the background polling loop. Checks DB for unnotified inbound
+    emails and sends a Telegram message for each one, prompting the user to reply.
+
+    The last notified thread is stored in bot_data[AWAITING_EMAIL_REPLY] so the
+    next free-text message the user sends becomes the reply.
+    """
+    db: ApplicationDB = app.bot_data["db"]
+    chat_id: int = app.bot_data["authorized_user_id"]
+    bot = app.bot
+
+    pending = await db.get_unnotified_emails()
+    for email_thread in pending:
+        preview = email_thread.body_preview.strip()[:300]
+        text = (
+            f"\U0001f4ec *New recruiter email*\n\n"
+            f"*From:* {email_thread.from_address}\n"
+            f"*Subject:* {email_thread.subject}\n\n"
+            f"{preview}\n\n"
+            f"Type your reply here, or /cancel to ignore."
+        )
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+            await db.mark_email_notified(email_thread.id)
+            # Store thread so the next free-text message is treated as the reply
+            app.bot_data[AWAITING_EMAIL_REPLY] = email_thread
+        except Exception as e:
+            logger.error("notify_new_emails: failed to send notification: %s", e)
 
 
 async def _submit_application(

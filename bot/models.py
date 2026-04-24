@@ -65,3 +65,16 @@ class PendingJob:
     awaiting_fields: list[FormField] = field(default_factory=list)
     current_field_index: int = 0
     app_id: int | None = None
+
+
+@dataclass
+class EmailThread:
+    message_id: str       # RFC 2822 Message-ID header value
+    thread_id: str        # In-Reply-To / References chain root (or message_id if root)
+    from_address: str
+    subject: str
+    body_preview: str     # First 500 chars of plain-text body
+    direction: str        # "inbound" | "outbound"
+    app_id: int | None = None
+    id: int | None = None
+    received_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

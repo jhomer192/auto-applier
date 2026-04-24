@@ -132,6 +132,60 @@ def main() -> None:
     print("Profile saved to: " + str(output_path.absolute()))
     print("You can edit profile.yaml directly at any time.")
 
+    _setup_gmail_env()
+
+
+def _setup_gmail_env() -> None:
+    """Optionally write GMAIL_ADDRESS / GMAIL_APP_PASSWORD into .env."""
+    sep = "=" * 60
+    print("")
+    print(sep)
+    print("Gmail Inbox (optional)")
+    print(sep)
+    print("The bot can watch your Gmail inbox for recruiter replies and")
+    print("let you respond directly from Telegram.")
+    print("")
+    use_gmail = input("Set up Gmail inbox? (y/N): ").strip().lower()
+    if use_gmail not in ("y", "yes"):
+        print("Skipping Gmail setup. You can add GMAIL_ADDRESS and")
+        print("GMAIL_APP_PASSWORD to .env later to enable it.")
+        return
+
+    print("")
+    print("You need a Gmail App Password (not your normal password).")
+    print("Create one at: https://myaccount.google.com/apppasswords")
+    print("(Requires 2-Step Verification to be enabled.)")
+    print("")
+    gmail_address = input("Gmail address: ").strip()
+    gmail_password = input("App Password (16-char, spaces ok): ").strip().replace(" ", "")
+
+    if not gmail_address or not gmail_password:
+        print("Skipping Gmail setup — incomplete input.")
+        return
+
+    env_path = Path(".env")
+    if not env_path.exists():
+        env_path.write_text("")
+
+    content = env_path.read_text()
+    lines = content.splitlines()
+
+    def _set_var(lines: list, key: str, value: str) -> list:
+        for i, line in enumerate(lines):
+            if line.startswith(key + "="):
+                lines[i] = key + "=" + value
+                return lines
+        lines.append(key + "=" + value)
+        return lines
+
+    lines = _set_var(lines, "GMAIL_ADDRESS", gmail_address)
+    lines = _set_var(lines, "GMAIL_APP_PASSWORD", gmail_password)
+    env_path.write_text("\n".join(lines) + "\n")
+
+    print("")
+    print("Gmail credentials saved to .env.")
+    print("The bot will poll your inbox every 5 minutes and notify you of new recruiter emails.")
+
 
 if __name__ == "__main__":
     main()

@@ -147,5 +147,15 @@ If non-zero: show the error and ask the user to re-check their bot token and cha
 
 The bot is always running in the background. Send a job URL to Telegram to apply.
 
+**Gmail inbox:** If `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are set in `.env`, the bot
+polls your inbox every 5 minutes. When a recruiter emails you, you get a Telegram
+notification with a preview. Type your reply directly in Telegram and the bot sends it
+via Gmail (as a proper reply thread). Use `/cancel` to dismiss without replying.
+
+To enable Gmail later without re-running full setup:
+1. Generate an App Password at https://myaccount.google.com/apppasswords
+2. Add to `.env`: `GMAIL_ADDRESS=you@gmail.com` and `GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`
+3. Restart: `sudo systemctl restart auto-applier`
+
 **Adding a new job site:** see `bot/adapters/base.py` for the `SiteAdapter` interface.
 Add your adapter to `bot/adapters/__init__.py` and restart the service.
