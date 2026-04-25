@@ -60,9 +60,9 @@ class JobPreferences:
     work_arrangement: list[str] = field(default_factory=list)  # "remote"|"hybrid"|"onsite"
     excluded_companies: list[str] = field(default_factory=list)
     auto_apply_threshold: int = 0  # match_score >= this + all fit checks pass → apply without Y/N (0 = disabled)
-    min_apply_gap_minutes: int = 4  # minimum minutes between application submissions
-    max_apply_gap_minutes: int = 8  # upper bound for randomised gap
-    max_applies_per_day: int = 30   # daily application cap (0 = no cap)
+    min_apply_gap_minutes: int = 0   # minimum minutes between application submissions (0 = no gap)
+    max_apply_gap_minutes: int = 0   # upper bound for randomised gap (0 = no gap)
+    max_applies_per_day: int = 0     # daily application cap (0 = no cap)
     requires_sponsorship: bool = False  # True if candidate needs H-1B or similar visa sponsorship
     auto_search: bool = True        # auto-generate searches from desired_roles (no manual /search add needed)
 

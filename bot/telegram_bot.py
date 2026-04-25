@@ -483,7 +483,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         excluded = ", ".join(prefs.excluded_companies) if prefs.excluded_companies else "none"
         auto = f"score >= {prefs.auto_apply_threshold}" if prefs.auto_apply_threshold else "off"
         gap = f"{prefs.min_apply_gap_minutes}–{prefs.max_apply_gap_minutes} min"
-        cap = str(prefs.max_applies_per_day) if prefs.max_applies_per_day else "30 (default)"
+        cap = str(prefs.max_applies_per_day) if prefs.max_applies_per_day else "unlimited"
         sponsorship = "yes (need sponsorship)" if prefs.requires_sponsorship else "no"
         auto_search = "on" if prefs.auto_search else "off"
         await update.message.reply_text(
@@ -1470,7 +1470,7 @@ async def _submit_application(
             db,
             min_gap_minutes=prefs.min_apply_gap_minutes,
             max_gap_minutes=prefs.max_apply_gap_minutes,
-            daily_cap=prefs.max_applies_per_day if prefs.max_applies_per_day > 0 else 30,
+            daily_cap=prefs.max_applies_per_day,
             notify=_notify_wait,
         )
     except RateLimitExceeded as e:

@@ -108,6 +108,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
     prefs = load_preferences(profile)
 
     pending = await db.get_pending_queue()
+    pending = pending[:5]  # process at most 5 per cycle
     if not pending:
         return
 

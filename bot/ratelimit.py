@@ -1,12 +1,7 @@
 """Application rate limiter.
 
-Enforces:
-  - Minimum randomised gap between submissions (default 4–8 minutes)
-  - Daily application cap (default 30/day)
-
-Uses the existing applications table — no new state needed. The last
-applied_at timestamp and today's applied count are read from the DB at
-check time so the limiter is accurate even across process restarts.
+All limits default to 0 (disabled). Set via /prefs if you want pacing.
+When both gap and cap are 0, enforce_rate_limit is a no-op.
 """
 import asyncio
 import logging
@@ -16,14 +11,13 @@ from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# Defaults (overridden by job_preferences if set)
-DEFAULT_MIN_GAP_MINUTES: int = 4
-DEFAULT_MAX_GAP_MINUTES: int = 8
-DEFAULT_DAILY_CAP: int = 30
+DEFAULT_MIN_GAP_MINUTES: int = 0   # 0 = no gap
+DEFAULT_MAX_GAP_MINUTES: int = 0   # 0 = no gap
+DEFAULT_DAILY_CAP: int = 0         # 0 = no cap
 
 
 class RateLimitExceeded(Exception):
-    """Raised when the daily cap is already reached."""
+    """Raised when the daily cap is reached."""
 
 
 async def enforce_rate_limit(
@@ -35,65 +29,62 @@ async def enforce_rate_limit(
 ) -> None:
     """Block until it is safe to submit the next application.
 
-    Steps:
-    1. Count today's successful applications. Raise RateLimitExceeded if >= cap.
-    2. Find the last successful application timestamp.
-    3. Choose a random target gap in [min_gap, max_gap] minutes.
-    4. Sleep for however long is left to reach that gap (0 if already past it).
+    All limits are opt-in — when daily_cap=0 and gap=0 this is a no-op.
 
     Args:
         db: ApplicationDB instance.
-        min_gap_minutes: Minimum minutes to wait since last submission.
-        max_gap_minutes: Upper bound for the randomised gap.
-        daily_cap: Maximum successful applications per UTC calendar day.
-        notify: Optional async callback called with a wait-status message.
+        min_gap_minutes: Minimum minutes between submissions (0 = no wait).
+        max_gap_minutes: Upper bound for randomised gap (0 = no wait).
+        daily_cap: Max successful applications per day (0 = unlimited).
+        notify: Optional async callback for wait-status messages.
     """
     now = datetime.now(timezone.utc)
 
-    # --- Daily cap ---
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    recent = await db.get_recent(limit=daily_cap + 20)
-    applied_today = sum(
-        1 for r in recent
-        if r.status == "applied"
-        and r.applied_at
-        and r.applied_at >= today_start
-    )
-    if applied_today >= daily_cap:
-        raise RateLimitExceeded(
-            f"Daily cap of {daily_cap} applications reached. Will resume tomorrow."
+    # --- Daily cap (skip if 0) ---
+    if daily_cap > 0:
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        recent = await db.get_recent(limit=daily_cap + 20)
+        applied_today = sum(
+            1 for r in recent
+            if r.status == "applied"
+            and r.applied_at
+            and r.applied_at >= today_start
         )
+        if applied_today >= daily_cap:
+            raise RateLimitExceeded(
+                f"Daily cap of {daily_cap} applications reached. Will resume tomorrow."
+            )
 
-    # --- Time gap ---
+    # --- Time gap (skip if both are 0) ---
+    if min_gap_minutes <= 0 and max_gap_minutes <= 0:
+        return
+
+    recent = await db.get_recent(limit=50)
     last_applied_str = next(
         (r.applied_at for r in recent if r.status == "applied" and r.applied_at),
         None,
     )
     if not last_applied_str:
-        return  # No prior applications — submit immediately
+        return
 
     try:
         last_dt = datetime.fromisoformat(last_applied_str)
         if last_dt.tzinfo is None:
             last_dt = last_dt.replace(tzinfo=timezone.utc)
     except ValueError:
-        return  # Unparseable timestamp — don't block
+        return
 
-    target_gap = random.uniform(min_gap_minutes * 60, max_gap_minutes * 60)
-    earliest_next = last_dt + timedelta(seconds=target_gap)
-    wait_secs = (earliest_next - now).total_seconds()
+    lo = max(min_gap_minutes, 0)
+    hi = max(max_gap_minutes, lo)
+    target_gap = random.uniform(lo * 60, hi * 60)
+    wait_secs = round((last_dt + timedelta(seconds=target_gap) - now).total_seconds())
 
     if wait_secs <= 0:
-        return  # Gap already passed
+        return
 
-    wait_secs = round(wait_secs)
     logger.info("Rate limiter: waiting %ds before next application", wait_secs)
-
     if notify:
         mins, secs = divmod(wait_secs, 60)
-        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-        await notify(
-            f"Pacing: waiting {time_str} before submitting to avoid detection."
-        )
+        await notify(f"Pacing: waiting {'{}m {}s'.format(mins,secs) if mins else '{}s'.format(secs)} before next submission.")
 
     await asyncio.sleep(wait_secs)
