@@ -159,7 +159,13 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
         "  and set salary_is_estimated=true\n"
         "- seniority_level: infer from title keywords (Senior/Staff/Principal/etc.) or JD text\n"
         "- work_arrangement: look for Remote/Hybrid/In-office/On-site language\n"
-        "- role_type: normalised lowercase category (ignore seniority prefix)\n\n"
+        "- role_type: normalised lowercase category (ignore seniority prefix)\n"
+        "- match_score for new grads: Do not heavily penalize lack of industry experience\n"
+        "  if the candidate's profile includes projects, certifications, or competitions\n"
+        "  that demonstrate the required skills. A student with 3 relevant projects and a\n"
+        "  Security+ cert applying to an entry-level security role should score 70+, not 40.\n"
+        "- Treat project tech stacks as equivalent to 'used X professionally' for scoring.\n"
+        "- Treat relevant certifications as partial credit toward the skill requirements.\n\n"
         f"{GROUNDING_CONSTRAINT}"
     )
     raw = await claude_call(prompt)
@@ -200,6 +206,7 @@ async def generate_field_answer(
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
 
     tailoring_block = ""
+    field_role_hint = ""
     if job_analysis is not None:
         tailoring_block = (
             f"\n{_build_tailoring_context(job_analysis)}\n"
@@ -207,12 +214,16 @@ async def generate_field_answer(
             "Adjust tone to match the company's voice. "
             "Choose which profile facts to highlight based on the key responsibilities above.\n"
         )
+        role_hint = _field_hint_for_role(job_analysis.role_type)
+        if role_hint:
+            field_role_hint = f"\nROLE-SPECIFIC GUIDANCE: {role_hint}\n"
 
     hint_block = f"\nFIELD GUIDANCE: {field_hint}\n" if field_hint else ""
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n"
         f"{tailoring_block}"
+        f"{field_role_hint}"
         f"{hint_block}\n"
         f"PROFILE:\n{profile_str}\n\n"
         f"FORM FIELD: {field_label}\n"
@@ -224,6 +235,125 @@ async def generate_field_answer(
         "Answer:"
     )
     return await claude_call(prompt)
+
+
+def _months_of_experience(job: dict) -> int:
+    """Rough months between start and end dates.
+
+    Args:
+        job: A work_history entry dict with optional 'start' and 'end' keys.
+
+    Returns:
+        Non-negative integer count of months, or 0 if dates cannot be parsed.
+    """
+    try:
+        from datetime import datetime
+        start = datetime.strptime(job.get("start", "2000-01"), "%Y-%m")
+        end_str = job.get("end", "present")
+        end = datetime.now() if end_str == "present" else datetime.strptime(end_str, "%Y-%m")
+        return max(0, (end.year - start.year) * 12 + (end.month - start.month))
+    except Exception:
+        return 0
+
+
+def _build_experience_context(profile: dict) -> str:
+    """Build a context block for new grads / low-experience candidates.
+
+    When work history is sparse, tells the LLM to lead with projects,
+    competitions, and certifications instead.
+
+    Args:
+        profile: Candidate profile dict (already sanitized).
+
+    Returns:
+        A formatted string with new-grad framing instructions,
+        or an empty string for experienced candidates or when there is
+        nothing extra to highlight.
+    """
+    history = profile.get("work_history", [])
+    projects = profile.get("projects", [])
+    certs = profile.get("certifications", [])
+    competitions = profile.get("competitions", [])
+
+    # Consider "low experience" if fewer than 2 full-time roles (12+ months)
+    full_time = [j for j in history if _months_of_experience(j) >= 12]
+
+    if len(full_time) >= 2 and not projects and not certs and not competitions:
+        return ""  # Experienced candidate, no special framing needed
+
+    if not projects and not certs and not competitions:
+        return ""  # Nothing extra to highlight
+
+    lines = ["\nCANDIDATE EXPERIENCE LEVEL: Student / New Grad / Early Career"]
+
+    if projects:
+        proj_summaries = [
+            f"{p['name']}: {p.get('outcome', p.get('description', ''))[:100]}"
+            for p in projects[:4]
+        ]
+        lines.append(f"Key projects: {'; '.join(proj_summaries)}")
+
+    if certs:
+        cert_names = [c['name'] for c in certs[:5]]
+        lines.append(f"Certifications: {', '.join(cert_names)}")
+
+    if competitions:
+        comp_summaries = [f"{c['name']} ({c['result']})" for c in competitions[:4]]
+        lines.append(f"Competitions/Awards: {'; '.join(comp_summaries)}")
+
+    lines.append(
+        "\nINSTRUCTION: This candidate has limited work history. "
+        "Lead with their strongest projects and achievements. "
+        "Do NOT fabricate work experience. "
+        "Frame project work as direct evidence of capability: "
+        "'Built X that does Y' is stronger than 'Familiar with Z'. "
+        "Competitions and certifications are first-class credentials for this candidate."
+    )
+    return "\n".join(lines)
+
+
+_FIELD_HINTS = {
+    "data scientist": (
+        "Emphasize Python/R proficiency, ML model experience (even from projects), "
+        "and quantitative reasoning."
+    ),
+    "data analyst": (
+        "Highlight SQL, data visualization, and any analysis projects with measurable "
+        "business impact."
+    ),
+    "security": (
+        "Lead with hands-on technical skills — CTF experience, certifications, and specific "
+        "tools (Wireshark, Metasploit, Burp Suite) are valued as highly as industry experience "
+        "at entry level."
+    ),
+    "economist": (
+        "Highlight econometric methods, statistical software (Stata, R), and policy/research "
+        "experience."
+    ),
+    "financial analyst": (
+        "Emphasize quantitative skills, Excel/Python modeling, and any finance coursework or "
+        "projects."
+    ),
+    "software engineer": (
+        "Lead with projects that demonstrate shipping and problem-solving, not just coursework."
+    ),
+}
+
+
+def _field_hint_for_role(role_type: str) -> str:
+    """Return a field-specific hint string for the given role type.
+
+    Args:
+        role_type: Normalised role category string (e.g. 'data scientist').
+
+    Returns:
+        A hint string if a match is found, otherwise an empty string.
+    """
+    role_lower = role_type.lower()
+    for key, hint in _FIELD_HINTS.items():
+        if key in role_lower:
+            return hint
+    return ""
 
 
 def _build_academic_block(profile: dict) -> str:
@@ -275,21 +405,30 @@ async def tailor_resume(job_analysis: JobAnalysis, profile: dict) -> str:
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
     tailoring_context = _build_tailoring_context(job_analysis)
     academic_block = _build_academic_block(safe_profile)
+    experience_context = _build_experience_context(safe_profile)
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
         f"{tailoring_context}\n"
         f"{academic_block}"
+        f"{experience_context}"
         f"PROFILE:\n{profile_str}\n\n"
         "Generate a tailored resume in Markdown for this specific role. Follow these rules:\n"
         "1. Start with the candidate's name and contact info (email, phone, location, LinkedIn/GitHub if present).\n"
         "2. Write a 2-3 sentence Summary that connects the candidate's top experience to the role's key responsibilities.\n"
         "   Use at least 2 ATS keywords. Match the company's tone.\n"
         "3. Skills section: list only skills that appear in the profile AND are relevant to this role.\n"
+        "   Include field-specific tools from projects and certifications, not just profile.skills.\n"
         "   Prioritize required_skills and preferred_skills from the job analysis.\n"
-        "4. Experience section: for each role in work_history, write 2-4 bullet points.\n"
-        "   Lead each bullet with an action verb. Include metrics where the profile states them.\n"
-        "   Emphasize bullets most relevant to this role's responsibilities.\n"
+        "4. Experience section:\n"
+        "   - If work_history has 2+ full-time roles: write 2-4 bullets per role,\n"
+        "     lead with action verbs, include metrics from profile.\n"
+        "   - If work_history is sparse (student / new grad): create a 'Projects'\n"
+        "     section BEFORE the experience section. For each project in profile.projects,\n"
+        "     write 2-3 bullets: what was built, key technical choices, and outcome/impact.\n"
+        "     Then include any work_history entries, even if brief.\n"
+        "   - If certifications exist: add a 'Certifications' section.\n"
+        "   - If competitions exist: add them under 'Awards & Recognition'.\n"
         "5. Education section: include degree, institution, graduation year.\n"
         "6. Only use facts from the profile. Do NOT invent metrics, titles, or responsibilities.\n"
         "7. Keep total length under 700 words.\n\n"
@@ -361,16 +500,22 @@ async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
     tailoring_context = _build_tailoring_context(job_analysis)
     academic_block = _build_academic_block(safe_profile)
+    experience_context = _build_experience_context(safe_profile)
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
         f"{tailoring_context}\n"
         f"{academic_block}"
+        f"{experience_context}"
         f"PROFILE:\n{profile_str}\n\n"
         "Write a cover letter for this role following these exact rules:\n"
         "1. Exactly 3 paragraphs — no more, no less.\n"
         "2. Opening paragraph: connect ONE specific piece of the candidate's experience directly\n"
         "   to ONE specific key responsibility listed above. Be concrete, not generic.\n"
+        "   For new grad / student candidates: open by describing a SPECIFIC project\n"
+        "   or achievement (from profile.projects or profile.competitions) and connecting\n"
+        "   it directly to ONE specific job responsibility. Don't open with 'I am a\n"
+        "   recent graduate' — open with what you built or accomplished.\n"
         "3. Middle paragraph: demonstrate fit using at least 3 of the ATS keywords listed above,\n"
         "   woven in naturally — not forced. Only use keywords where the profile actually supports them.\n"
         "4. Closing paragraph: reference why_this_role specifically to show genuine interest in\n"

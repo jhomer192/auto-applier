@@ -100,6 +100,21 @@ def main() -> None:
     profile["education"] = collect_education()
 
     print("")
+    projects = _collect_projects()
+    if projects:
+        profile["projects"] = projects
+
+    print("")
+    certs = _collect_certifications()
+    if certs:
+        profile["certifications"] = certs
+
+    print("")
+    competitions = _collect_competitions()
+    if competitions:
+        profile["competitions"] = competitions
+
+    print("")
     acad = _collect_academic()
     if acad:
         profile["academic"] = acad
@@ -147,6 +162,97 @@ def main() -> None:
     print("You can also update preferences at any time with /prefs in Telegram.")
 
     _setup_gmail_env()
+
+
+def _collect_projects() -> list[dict]:
+    """Collect project entries interactively.
+
+    Returns:
+        List of project dicts with name, description, tech, outcome, and optional link.
+    """
+    print("-- Projects --")
+    print("Projects are your most important asset as a new grad. Include class projects,")
+    print("personal projects, research implementations, open source contributions.")
+    try:
+        count = int(input("How many projects to include (0 to skip)? ").strip() or "0")
+    except ValueError:
+        count = 0
+    projects = []
+    for i in range(count):
+        print("")
+        print("Project " + str(i + 1) + ":")
+        name = ask("  Project name", required=True)
+        description = ask("  What does it do / what did you build?", required=True)
+        tech_raw = ask("  Technologies / languages / frameworks (comma-separated)")
+        tech = [t.strip() for t in tech_raw.split(",") if t.strip()] if tech_raw else []
+        outcome = ask("  Outcome / impact / metrics (e.g. 98% accuracy, 500 GitHub stars)")
+        link = ask("  GitHub / demo URL (Enter to skip)")
+        entry: dict = {"name": name, "description": description}
+        if tech:
+            entry["tech"] = tech
+        if outcome:
+            entry["outcome"] = outcome
+        if link:
+            entry["link"] = link
+        projects.append(entry)
+    return projects
+
+
+def _collect_certifications() -> list[dict]:
+    """Collect certification entries interactively.
+
+    Returns:
+        List of certification dicts with name, issuer, year, and optional score.
+    """
+    print("-- Certifications --")
+    print("Include technical certifications (Security+, AWS, CFA, Google Analytics, etc.)")
+    try:
+        count = int(input("How many certifications to include (0 to skip)? ").strip() or "0")
+    except ValueError:
+        count = 0
+    certs = []
+    for i in range(count):
+        print("")
+        print("Certification " + str(i + 1) + ":")
+        name = ask("  Certification name", required=True)
+        issuer = ask("  Issuer (e.g. CompTIA, AWS, Google)")
+        year = ask("  Year obtained")
+        score = ask("  Score (optional, e.g. 900/1000, top 5%)")
+        entry: dict = {"name": name}
+        if issuer:
+            entry["issuer"] = issuer
+        if year:
+            entry["year"] = year
+        if score:
+            entry["score"] = score
+        certs.append(entry)
+    return certs
+
+
+def _collect_competitions() -> list[dict]:
+    """Collect competition and award entries interactively.
+
+    Returns:
+        List of competition dicts with name, result, and optional year.
+    """
+    print("-- Competitions & Awards --")
+    print("Include Kaggle, CTFs, hackathons, case competitions, research awards, scholarships.")
+    try:
+        count = int(input("How many competitions / awards to include (0 to skip)? ").strip() or "0")
+    except ValueError:
+        count = 0
+    competitions = []
+    for i in range(count):
+        print("")
+        print("Competition / Award " + str(i + 1) + ":")
+        name = ask("  Name (e.g. Kaggle Fraud Detection, picoCTF 2024, HackMIT)", required=True)
+        result = ask("  Result (e.g. Top 3%, 1st place, finalist, rank 47/2000)", required=True)
+        year = ask("  Year (Enter to skip)")
+        entry: dict = {"name": name, "result": result}
+        if year:
+            entry["year"] = year
+        competitions.append(entry)
+    return competitions
 
 
 def _collect_academic() -> dict:
