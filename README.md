@@ -1,8 +1,45 @@
 # Auto Job Applier — Complete Beginner Setup Guide
 
-Send a job URL to your phone. Your bot reads the posting, fills out the application using your real resume info, and sends you a screenshot when it's done. You just tap Y or N.
+Send a job URL to your phone. Your bot reads the posting, evaluates the fit against your preferences, generates a tailored resume and cover letter, fills out the application, and asks you to confirm — or just submits automatically if the match score is high enough. You just tap Y or N.
 
 This guide assumes you have never used a terminal, never set up a server, and have no idea what any of this means. That's fine. Every step is numbered, every command is copy-paste, and every confusing moment is called out ahead of time.
+
+---
+
+## Features
+
+### Apply from a URL
+Send any LinkedIn Easy Apply, Greenhouse, or Lever job URL to Telegram. The bot analyzes the posting, generates a tailored resume and cover letter for that specific job, and asks if you want to apply. You see a summary before committing:
+
+```
+Software Engineer at Acme Corp (via Greenhouse)
+Location: Remote | Salary: $120k–$150k
+Match score: 87/100
+
+⚠  No Go/Rust experience mentioned — minor gap
+Cover letter preview: "I was drawn to Acme's work on distributed..."
+
+Reply Y to apply, N to skip
+```
+
+### Smart auto-decisions
+- **Auto-apply** — set a score threshold (e.g. 80). If the match is above it, the bot submits without waiting for your Y.
+- **Auto-skip** — add companies to an exclude list and the bot silently passes on them. If the salary is far below your floor, it skips automatically.
+
+### Background job search
+Set up saved searches and the bot polls job boards on your behalf. When new listings appear that match your criteria, it pings you in Telegram.
+
+### Gmail integration
+The bot watches your inbox for recruiter emails. When one arrives, you get a Telegram notification with a preview. Type your reply in Telegram and the bot sends it as a proper email reply. Rejections and application confirmations are silently filtered — only interview requests and job offers trigger a notification.
+
+### Retrieve past materials
+Use `/resume <id>` or `/coverletter <id>` to pull up the tailored resume or cover letter that was generated for any past application.
+
+### Profile building
+The `/profile` command runs a short achievement interview. Your answers are used to personalize every resume and cover letter the bot generates.
+
+### Full anti-detection
+Human-like typing and mouse movement, randomized browser fingerprints, rate limiting, and configurable daily application caps.
 
 ---
 
@@ -12,7 +49,7 @@ This guide assumes you have never used a terminal, never set up a server, and ha
 |---|---|---|
 | DigitalOcean account | $6/month | A computer in the cloud that runs the bot 24/7, even when your laptop is off |
 | Claude Max plan | $100/month | The AI brain that reads job postings and fills out forms |
-| Telegram app | Free | How you send URLs to the bot and get back screenshots |
+| Telegram app | Free | How you send URLs to the bot and get back results |
 
 **Total ongoing cost: ~$106/month.** You can cancel either service any time.
 
@@ -218,15 +255,19 @@ Once setup is done, your bot is running in the background on your server. You do
    - `https://linkedin.com/jobs/view/...`
    - `https://boards.greenhouse.io/...`
    - `https://jobs.lever.co/...`
-3. The bot will reply with a summary of the job and ask **Y or N**
+3. The bot will reply with a match summary and ask **Y or N**
 
 **You'll see something like:**
 
 ```
 Software Engineer at Acme Corp (via Greenhouse)
 Location: Remote | Salary: $120k–$150k
+Match score: 87/100
 
-Ready to apply using your profile. Reply Y to submit or N to skip.
+⚠  No Go/Rust experience mentioned — minor gap
+Cover letter preview: "I was drawn to Acme's work on distributed..."
+
+Reply Y to apply, N to skip
 ```
 
 4. Reply **Y** to apply or **N** to skip
@@ -234,14 +275,40 @@ Ready to apply using your profile. Reply Y to submit or N to skip.
 
 > **What if it asks me something before submitting?** If the application form contains a question not covered by your profile — like "describe a time you showed leadership" — the bot will ask you before it submits. Just reply in Telegram and it will continue.
 
-### Slash commands
+### Job search commands
 
-Send these to your bot anytime:
+Set up searches and the bot will ping you when new listings appear:
 
+- `/search add <query>` — start polling for a query (e.g. `/search add backend engineer`)
+- `/search add <query> in <location>` — limit to a location (e.g. `/search add backend engineer in Austin`)
+- `/search list` — show all active searches
+- `/search stop <id>` — pause a search
+
+### Preference commands
+
+These control how the bot evaluates and handles jobs:
+
+- `/prefs roles <role1>, <role2>` — set your desired job titles (e.g. `/prefs roles Software Engineer, Backend Engineer`)
+- `/prefs salary <min>` — set your salary floor (e.g. `/prefs salary 120000`)
+- `/prefs salary <min> target <t>` — set floor and target (e.g. `/prefs salary 120000 target 160000`)
+- `/prefs seniority <level>` — set seniority preference (e.g. `/prefs seniority senior`)
+- `/prefs arrangement <remote|hybrid|onsite>` — set work arrangement preference
+- `/prefs autoapply <score>` — auto-submit if match score is at or above this number; set to 0 to disable (e.g. `/prefs autoapply 85`)
+- `/prefs exclude <company>` — add a company to your hard-pass list
+- `/prefs unexclude <company>` — remove a company from that list
+- `/prefs pace <min> <max>` — set the min/max gap in minutes between applications (e.g. `/prefs pace 10 30`)
+- `/prefs dailycap <n>` — maximum applications per day (e.g. `/prefs dailycap 15`)
+- `/prefs show` — display all your current preferences
+
+### Profile and history commands
+
+- `/profile` — run the achievement interview to update your profile
+- `/resume <id>` — retrieve the tailored resume generated for a past application
+- `/coverletter <id>` — retrieve the cover letter generated for a past application
 - `/status` — see how many applications you've sent total
-- `/history` — list your recent applications with dates
-- `/cancel` — stop a pending application
-- `/help` — show a quick reminder of what the bot can do
+- `/history` — list your recent applications with dates and scores
+- `/cancel` — dismiss the current pending item (a job confirmation or a recruiter email)
+- `/help` — show a quick reminder of available commands
 
 ---
 
@@ -279,13 +346,10 @@ journalctl -u auto-applier -f
 This shows live log output. Look for any error messages in red. Press `Ctrl+C` to stop watching logs.
 
 **I used /cancel and my recruiter email notifications stopped**
-`/cancel` dismisses the current pending email (one at a time). The bot polls for new
-emails every 5 minutes — if more are waiting, you'll be prompted for the next one.
-Rejections and application confirmations are silently filtered; only interview requests
-and job offers trigger a notification.
+`/cancel` dismisses the current pending item (one at a time). The bot polls for new emails every 5 minutes — if more are waiting, you'll be prompted for the next one. Rejections and application confirmations are silently filtered; only interview requests and job offers trigger a notification.
 
 **I want to update my profile (new job title, new skills, etc.)**
-SSH into your server, go to the project folder, edit `profile.yaml` with your changes, then restart the service:
+You can run `/profile` from Telegram to update it interactively, or SSH into your server and edit the file directly:
 
 ```bash
 cd auto-applier
@@ -297,6 +361,9 @@ Make your edits in `nano`, press `Ctrl+X`, then `Y`, then Enter to save. Then:
 ```bash
 sudo systemctl restart auto-applier
 ```
+
+**My auto-apply threshold isn't working**
+Use `/prefs show` to confirm the `autoapply` value is set to what you expect. A value of 0 means auto-apply is disabled. Make sure you've also set your role and salary preferences — the bot needs those to compute a match score.
 
 ---
 

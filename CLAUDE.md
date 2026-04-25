@@ -10,8 +10,10 @@
 
 You are helping set up an automatic job application bot. It will:
 - Let the user send a job URL (LinkedIn Easy Apply, Greenhouse, or Lever) to Telegram
-- Automatically fill and submit the application using their real profile
-- Send a screenshot confirmation
+- Analyze the posting, score the match against the user's preferences, and generate a tailored resume + cover letter
+- Auto-apply if the match score meets the user's threshold, or present a Y/N prompt with score, salary info, fit warnings, and cover letter preview
+- Auto-skip jobs from excluded companies or with salaries far below the user's floor
+- Poll saved job searches in the background and notify the user of new listings
 - Watch Gmail for recruiter replies and let the user respond from Telegram
 
 Follow every numbered step exactly. Run all commands yourself. Only stop and ask the user
@@ -148,17 +150,38 @@ If exit 0: tell the user:
 >
 > **How to use it:**
 > - Send any LinkedIn Easy Apply, Greenhouse, or Lever job URL to your Telegram bot
-> - Reply **Y** to apply or **N** to skip
+> - The bot evaluates fit, generates a tailored resume + cover letter, and asks Y/N
+> - Reply **Y** to apply or **N** to skip — or let auto-apply handle it
 > - The bot fills and submits the form and sends you a screenshot
 >
-> **Commands:**
+> **Job search commands:**
+> - `/search add <query> [in <location>]` — add a saved job search
+> - `/search list` — show active searches
+> - `/search stop <id>` — pause a search
+>
+> **Preference commands:**
+> - `/prefs roles <role1>, <role2>` — set desired job titles
+> - `/prefs salary <min> [target <t>]` — set salary floor/target
+> - `/prefs seniority <level>` — set seniority preference
+> - `/prefs arrangement <remote|hybrid|onsite>` — set work arrangement
+> - `/prefs autoapply <score>` — auto-apply threshold (0 = disabled)
+> - `/prefs exclude <company>` / `/prefs unexclude <company>`
+> - `/prefs pace <min> <max>` — application gap in minutes
+> - `/prefs dailycap <n>` — max applications per day
+> - `/prefs show` — display current preferences
+>
+> **Profile and history:**
+> - `/profile` — run achievement interview to update profile
+> - `/resume <id>` — retrieve tailored resume for a past application
+> - `/coverletter <id>` — retrieve cover letter for a past application
 > - `/status` — see how many applications you've sent
-> - `/history` — list recent applications
-> - `/cancel` — cancel a pending application
+> - `/history` — list recent applications with scores
+> - `/cancel` — dismiss the current pending item
+> - `/help` — show all commands
 >
 > **Logs:** `journalctl -u auto-applier -f`
 > **Restart:** `sudo systemctl restart auto-applier`
-> **Update profile:** edit `profile.yaml`, then restart
+> **Update profile:** run `/profile` in Telegram, or edit `profile.yaml` and restart
 
 If non-zero: show the error and ask the user to re-check their bot token and chat ID in
 `.env`, then re-run the test.
@@ -169,12 +192,44 @@ If non-zero: show the error and ask the user to re-check their bot token and cha
 
 The bot is always running in the background. Send a job URL to Telegram to apply.
 
+**Applying:** Send a LinkedIn Easy Apply, Greenhouse, or Lever URL. The bot evaluates the
+match against the user's preferences and generates a tailored resume + cover letter. It
+then presents a Y/N prompt showing match score, salary info, fit warnings, and a cover
+letter preview. If `autoapply` is set and the score meets the threshold, it submits
+without waiting. If the company is on the exclude list or salary is far below the floor,
+it hard-passes automatically.
+
+**Background job search:**
+- `/search add <query> [in <location>]` — add a saved search (bot polls and pings on new listings)
+- `/search list` — show active searches
+- `/search stop <id>` — pause a search
+
+**Preferences:**
+- `/prefs roles <role1>, <role2>` — desired job titles
+- `/prefs salary <min> [target <t>]` — salary floor and optional target
+- `/prefs seniority <level>` — seniority level preference
+- `/prefs arrangement <remote|hybrid|onsite>` — work arrangement preference
+- `/prefs autoapply <score>` — auto-apply threshold; 0 = disabled
+- `/prefs exclude <company>` / `/prefs unexclude <company>` — manage hard-pass list
+- `/prefs pace <min> <max>` — min/max gap in minutes between applications
+- `/prefs dailycap <n>` — max applications per day
+- `/prefs show` — display all current preferences
+
+**Profile and history:**
+- `/profile` — run achievement interview to refresh profile
+- `/resume <id>` — retrieve tailored resume for a past application
+- `/coverletter <id>` — retrieve cover letter for a past application
+- `/status` — total application count
+- `/history` — recent applications with dates and match scores
+- `/cancel` — dismiss the current pending item (one at a time: job confirmation or recruiter email)
+- `/help` — show all commands
+
 **Gmail inbox:** If `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are set in `.env`, the bot
 polls your inbox every 5 minutes. When a recruiter emails you, you get a Telegram
 notification with a preview. Type your reply directly in Telegram and the bot sends it
-via Gmail (as a proper reply thread). Use `/cancel` to dismiss without replying.
-`/cancel` dismisses only the *current* pending item — one email at a time if multiple
-recruiter emails arrived, or the current job application if one is in progress.
+via Gmail (as a proper reply thread). Rejections and application confirmations are
+silently filtered — only interview requests and job offers trigger a notification.
+Use `/cancel` to dismiss without replying.
 
 To enable Gmail later without re-running full setup:
 1. Generate an App Password at https://myaccount.google.com/apppasswords
