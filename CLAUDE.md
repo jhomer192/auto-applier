@@ -170,6 +170,10 @@ If exit 0: tell the user:
 > - `/prefs dailycap <n>` — max applications per day
 > - `/prefs show` — display current preferences
 >
+> **Passive discovery commands:**
+> - `/queue` — view pending discovered jobs, reply with numbers (e.g. "1,3") or "all" to investigate
+> - `/report` — pipeline stats (today/week/all-time) + queue size + top companies
+>
 > **Profile and history:**
 > - `/profile` — run achievement interview to update profile
 > - `/resume <id>` — retrieve tailored resume for a past application
@@ -199,10 +203,16 @@ letter preview. If `autoapply` is set and the score meets the threshold, it subm
 without waiting. If the company is on the exclude list or salary is far below the floor,
 it hard-passes automatically.
 
-**Background job search:**
-- `/search add <query> [in <location>]` — add a saved search (bot polls and pings on new listings)
+**Passive job discovery:**
+The bot polls saved searches every 30 minutes. New matches go into a review queue instead
+of spamming you one at a time. When new jobs arrive you get a single numbered list. Reply
+with numbers (e.g. "1,3") or "all" to investigate those jobs — the bot runs full analysis
+and Y/N prompts in sequence. "skip all" clears the queue.
+- `/search add <query> [in <location>]` — add a saved search
 - `/search list` — show active searches
-- `/search stop <id>` — pause a search
+- `/search rm <id>` — pause a search
+- `/queue` — show pending jobs in the queue right now
+- `/report` — pipeline stats (today/week/all-time), queue size, top companies
 
 **Preferences:**
 - `/prefs roles <role1>, <role2>` — desired job titles
@@ -221,6 +231,7 @@ it hard-passes automatically.
 - `/coverletter <id>` — retrieve cover letter for a past application
 - `/status` — total application count
 - `/history` — recent applications with dates and match scores
+- `/report` — full pipeline stats + queue size + top companies
 - `/cancel` — dismiss the current pending item (one at a time: job confirmation or recruiter email)
 - `/help` — show all commands
 

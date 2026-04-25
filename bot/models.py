@@ -146,6 +146,18 @@ class SearchResult:
 
 
 @dataclass
+class QueuedJob:
+    """A job discovered by a saved search, pending review by the user."""
+    url: str
+    title: str
+    company: str
+    search_id: int | None = None
+    id: int | None = None
+    queued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    status: str = "pending"  # "pending" | "dismissed" | "applied" | "skipped"
+
+
+@dataclass
 class EmailThread:
     message_id: str       # RFC 2822 Message-ID header value
     thread_id: str        # In-Reply-To / References chain root (or message_id if root)

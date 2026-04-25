@@ -20,7 +20,7 @@ from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines
 from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
-from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, SavedSearch
+from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.profile import load_preferences, save_preferences
 from bot.ratelimit import enforce_rate_limit, RateLimitExceeded
 from bot.scraper import field_answer_hint
@@ -34,6 +34,10 @@ AWAITING_EMAIL_REPLY = "awaiting_email_reply"  # value: EmailThread
 
 # Profile interview state
 PROFILE_INTERVIEW = "profile_interview"   # value: {"step": int, "answers": [(q, a), ...]}
+
+# Passive job discovery batch state (bot_data — set by background task)
+PENDING_BATCH = "pending_batch"   # list[QueuedJob] shown to user awaiting number reply
+BATCH_QUEUE = "batch_queue"       # list[QueuedJob] selected by user, awaiting sequential processing
 
 # Profile interview questions
 _PROFILE_QUESTIONS = [
@@ -100,6 +104,8 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("coverletter", cmd_coverletter))
         app.add_handler(CommandHandler("profile", cmd_profile))
         app.add_handler(CommandHandler("prefs", cmd_prefs))
+        app.add_handler(CommandHandler("queue", cmd_queue))
+        app.add_handler(CommandHandler("report", cmd_report))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -130,6 +136,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/resume <id> \u2014 tailored resume for application\n"
         "/coverletter <id> \u2014 cover letter for application\n"
         "/cancel \u2014 cancel pending item\n\n"
+        "Passive discovery commands:\n"
+        "/queue \u2014 show pending discovered jobs (reply with numbers to investigate)\n"
+        "/report \u2014 application stats (today/week/all-time) + pipeline summary\n\n"
         "Job search commands:\n"
         "/search add <query> [location] \u2014 save a search\n"
         "/search list \u2014 list saved searches\n"
@@ -280,8 +289,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ))
             context.user_data.pop(PENDING_JOB, None)
             await update.message.reply_text("Skipped.")
+            await _maybe_process_next_batch_item(update, context)
         else:
             await update.message.reply_text("Reply Y to apply or N to skip. Or /cancel.")
+        return
+
+    # Case 2b: batch selection response (from /queue or passive discovery message)
+    if context.bot_data.get(PENDING_BATCH) is not None:
+        await _handle_batch_response(update, context, text)
         return
 
     # Case 3: new job URL
@@ -1154,11 +1169,12 @@ async def notify_new_emails(app: Application) -> None:
 
 
 async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
-    """Check saved searches for new job matches and send them to Telegram.
+    """Check saved searches for new job matches and queue them for batch review.
 
     Called from the background search poll loop. For each active search, runs the
-    LinkedIn scraper, filters out already-seen URLs, and sends new matches as
-    individual Y/N prompts — identical to sending a URL manually.
+    LinkedIn scraper, filters out already-seen URLs, and adds new matches to the
+    job_queue table. At the end, if any new jobs were queued, sends a single batch
+    message to Telegram so the user can select which to investigate.
 
     Args:
         app: The running PTB Application instance.
@@ -1174,6 +1190,7 @@ async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
         return
 
     now = datetime.now(timezone.utc).isoformat()
+    total_new = 0
 
     for search in searches:
         try:
@@ -1183,29 +1200,211 @@ async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
             await db.touch_search(search.id, now)
             continue
 
-        new_count = 0
         for result in results:
             if await db.is_job_seen(result.url):
                 continue
             await db.mark_job_seen(result.url, search.id)
-            new_count += 1
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"\U0001f50d *Search match* — \"{search.query}\"\n\n"
-                        f"*{result.title}* at *{result.company}*\n"
-                        f"{result.url}\n\n"
-                        "Send the URL above to apply, or ignore."
-                    ),
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
-                logger.error("notify_search_matches: send error: %s", e)
+            inserted = await db.enqueue_job(result.url, result.title, result.company, search.id)
+            if inserted:
+                total_new += 1
 
-        if new_count:
-            logger.info("search %r: sent %d new matches", search.query, new_count)
         await db.touch_search(search.id, now)
+
+    if total_new == 0:
+        return
+
+    logger.info("search poll: %d new jobs queued", total_new)
+
+    # Build and send the batch message so the user can pick which to investigate
+    pending_jobs = await db.get_pending_queue()
+    if not pending_jobs:
+        return
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=_build_batch_message(pending_jobs, total_new),
+            parse_mode="Markdown",
+        )
+        app.bot_data[PENDING_BATCH] = pending_jobs
+    except Exception as e:
+        logger.error("notify_search_matches: send error: %s", e)
+
+
+def _build_batch_message(jobs: list["QueuedJob"], new_count: int | None = None) -> str:
+    """Format a numbered list of queued jobs for the user to select from."""
+    header = (
+        f"\U0001f50d *{new_count} new job{'s' if new_count != 1 else ''} discovered!*\n\n"
+        if new_count
+        else f"\U0001f4cb *Job queue — {len(jobs)} pending*\n\n"
+    )
+    lines = [header]
+    for i, job in enumerate(jobs, 1):
+        lines.append(f"*{i}.* {job.title} \u2014 {job.company}")
+    lines.append(
+        "\nReply with numbers to investigate (e.g. *1,3*) or *all*.\n"
+        "Type *skip all* to dismiss."
+    )
+    return "\n".join(lines)
+
+
+async def _handle_batch_response(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    """Handle user's number selection in response to a batch job listing."""
+    db: ApplicationDB = context.bot_data["db"]
+    batch: list[QueuedJob] = context.bot_data.get(PENDING_BATCH, [])
+    if not batch:
+        context.bot_data.pop(PENDING_BATCH, None)
+        return
+
+    normalized = text.strip().lower()
+
+    if normalized in ("skip all", "skip"):
+        dismissed = await db.dismiss_all_queued()
+        context.bot_data.pop(PENDING_BATCH, None)
+        await update.message.reply_text(f"Dismissed {dismissed} job(s). Queue cleared.")
+        return
+
+    if normalized == "all":
+        selected = list(batch)
+    else:
+        # Parse "1,3,5" or "1 3 5" or "1, 3, 5"
+        indices: list[int] = []
+        for part in re.split(r"[,\s]+", normalized):
+            part = part.strip()
+            if part.isdigit():
+                idx = int(part) - 1  # convert 1-based to 0-based
+                if 0 <= idx < len(batch):
+                    indices.append(idx)
+        if not indices:
+            await update.message.reply_text(
+                "Reply with job numbers (e.g. 1,3) or 'all' to investigate, "
+                "or 'skip all' to dismiss."
+            )
+            return
+        selected = [batch[i] for i in indices]
+
+    # Dismiss all non-selected pending jobs
+    selected_ids = {j.id for j in selected}
+    for job in batch:
+        if job.id not in selected_ids:
+            await db.update_queued_job_status(job.id, "dismissed")
+
+    context.bot_data.pop(PENDING_BATCH, None)
+
+    # Queue selected jobs for sequential processing
+    context.bot_data[BATCH_QUEUE] = list(selected)
+    count = len(selected)
+    await update.message.reply_text(
+        f"Investigating {count} job{'s' if count != 1 else ''}. "
+        "I'll analyze them one at a time."
+    )
+    await _maybe_process_next_batch_item(update, context)
+
+
+async def _maybe_process_next_batch_item(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Pop the next job from BATCH_QUEUE and start the analysis flow for it."""
+    queue: list[QueuedJob] = context.bot_data.get(BATCH_QUEUE, [])
+    if not queue:
+        context.bot_data.pop(BATCH_QUEUE, None)
+        return
+    if context.user_data.get(PENDING_JOB):
+        # Another job is already being handled — don't start the next one yet
+        return
+    next_job = queue.pop(0)
+    if not queue:
+        context.bot_data.pop(BATCH_QUEUE, None)
+    else:
+        context.bot_data[BATCH_QUEUE] = queue
+
+    remaining = len(context.bot_data.get(BATCH_QUEUE, []))
+    if remaining:
+        await update.message.reply_text(
+            f"({remaining} more in queue after this)"
+        )
+    await _handle_job_url(update, context, next_job.url)
+
+
+async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show pending discovered jobs and let user select which to investigate.
+
+    /queue
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    pending = await db.get_pending_queue()
+
+    if not pending:
+        await update.message.reply_text(
+            "Job queue is empty.\n\n"
+            "Add saved searches with /search add <query> [location] — "
+            "I'll poll them every 30 minutes and queue new matches here."
+        )
+        return
+
+    context.bot_data[PENDING_BATCH] = pending
+    await update.message.reply_text(
+        _build_batch_message(pending),
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show application pipeline stats.
+
+    /report
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    today_iso = (now - timedelta(hours=24)).isoformat()
+    week_iso = (now - timedelta(days=7)).isoformat()
+
+    today_stats = await db.get_stats(since_iso=today_iso)
+    week_stats = await db.get_stats(since_iso=week_iso)
+    all_stats = await db.get_stats()
+    top_companies = await db.get_top_companies(limit=5)
+    queue_count = await db.get_queue_count()
+
+    def _fmt(stats: dict[str, int]) -> str:
+        if not stats:
+            return "  none"
+        return "\n".join(
+            f"  {status}: {count}"
+            for status, count in sorted(stats.items(), key=lambda x: -x[1])
+        )
+
+    lines = ["Application Report\n"]
+
+    lines.append("Last 24 hours:")
+    lines.append(_fmt(today_stats))
+
+    lines.append("\nLast 7 days:")
+    lines.append(_fmt(week_stats))
+
+    lines.append("\nAll time:")
+    lines.append(_fmt(all_stats))
+
+    lines.append(f"\nJob queue: {queue_count} pending review")
+    if queue_count:
+        lines.append("  /queue to review")
+
+    if top_companies:
+        lines.append("\nTop companies applied to:")
+        for company, count in top_companies:
+            lines.append(f"  {company} ({count})")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def _submit_application(
@@ -1333,3 +1532,5 @@ async def _submit_application(
         await update.message.reply_text(
             f"Application failed: {result.error}\nNothing was submitted. (ID: {app_id})"
         )
+
+    await _maybe_process_next_batch_item(update, context)

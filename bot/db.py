@@ -1,6 +1,6 @@
 import aiosqlite
 from pathlib import Path
-from bot.models import ApplicationRecord, EmailThread, SavedSearch
+from bot.models import ApplicationRecord, EmailThread, QueuedJob, SavedSearch
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS applications (
@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS email_threads (
 """
 CREATE_EMAIL_IDX = "CREATE INDEX IF NOT EXISTS idx_email_thread_id ON email_threads(thread_id);"
 
+CREATE_JOB_QUEUE_TABLE = """
+CREATE TABLE IF NOT EXISTS job_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL UNIQUE,
+    title       TEXT NOT NULL,
+    company     TEXT NOT NULL,
+    search_id   INTEGER REFERENCES saved_searches(id),
+    queued_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    status      TEXT NOT NULL DEFAULT 'pending'
+);
+"""
+CREATE_JOB_QUEUE_IDX = "CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status);"
+
 
 class ApplicationDB:
     def __init__(self, db_path: str = "data/applications.db") -> None:
@@ -77,6 +90,8 @@ class ApplicationDB:
             await db.execute(CREATE_SEARCHES_TABLE)
             await db.execute(CREATE_SEEN_JOBS_TABLE)
             await db.execute(CREATE_SEEN_JOBS_IDX)
+            await db.execute(CREATE_JOB_QUEUE_TABLE)
+            await db.execute(CREATE_JOB_QUEUE_IDX)
             # Migrate existing DBs: add new columns if missing
             for col, defn in [
                 ("cover_letter", "TEXT NOT NULL DEFAULT ''"),
@@ -260,6 +275,79 @@ class ApplicationDB:
             )
             await db.commit()
 
+    # --- Job queue ---
+
+    async def enqueue_job(self, url: str, title: str, company: str, search_id: int | None = None) -> bool:
+        """Add a job to the review queue. Returns True if newly inserted, False if already present."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO job_queue (url, title, company, search_id) VALUES (?,?,?,?)",
+                (url, title, company, search_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_pending_queue(self) -> list["QueuedJob"]:
+        """Return all pending (un-reviewed) queued jobs, oldest first."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM job_queue WHERE status='pending' ORDER BY queued_at ASC"
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_queued_job(row) for row in rows]
+
+    async def get_queue_count(self) -> int:
+        """Return count of pending jobs in the queue."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM job_queue WHERE status='pending'"
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def update_queued_job_status(self, job_id: int, status: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute("UPDATE job_queue SET status=? WHERE id=?", (status, job_id))
+            await db.commit()
+
+    async def dismiss_all_queued(self) -> int:
+        """Mark all pending queued jobs as dismissed. Returns count dismissed."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "UPDATE job_queue SET status='dismissed' WHERE status='pending'"
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    # --- Stats ---
+
+    async def get_stats(self, since_iso: str | None = None) -> dict[str, int]:
+        """Return {status: count} for applications, optionally filtered by date."""
+        async with aiosqlite.connect(self._path) as db:
+            if since_iso:
+                cursor = await db.execute(
+                    "SELECT status, COUNT(*) FROM applications WHERE created_at >= ? GROUP BY status",
+                    (since_iso,),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT status, COUNT(*) FROM applications GROUP BY status"
+                )
+            rows = await cursor.fetchall()
+            return {row[0]: row[1] for row in rows}
+
+    async def get_top_companies(self, limit: int = 5) -> list[tuple[str, int]]:
+        """Return [(company, count)] for the top N most-applied companies."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "SELECT company, COUNT(*) as cnt FROM applications WHERE status='applied' "
+                "GROUP BY company ORDER BY cnt DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [(row[0], row[1]) for row in rows]
+
 
 def _row_to_email(row: aiosqlite.Row) -> EmailThread:
     return EmailThread(
@@ -290,6 +378,18 @@ def _row_to_record(row: aiosqlite.Row) -> ApplicationRecord:
         cover_letter=row["cover_letter"] if "cover_letter" in row.keys() else "",
         tailored_resume=row["tailored_resume"] if "tailored_resume" in row.keys() else "",
         created_at=row["created_at"],
+    )
+
+
+def _row_to_queued_job(row: aiosqlite.Row) -> "QueuedJob":
+    return QueuedJob(
+        id=row["id"],
+        url=row["url"],
+        title=row["title"],
+        company=row["company"],
+        search_id=row["search_id"],
+        queued_at=row["queued_at"],
+        status=row["status"],
     )
 
 
