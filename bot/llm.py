@@ -144,7 +144,9 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
         '  "salary_is_estimated": <true if you estimated, false if explicitly posted>,\n'
         '  "seniority_level": "<one of: junior | mid | senior | staff | principal | director | unknown>",\n'
         '  "work_arrangement": "<one of: remote | hybrid | onsite | unknown>",\n'
-        '  "role_type": "<short normalised role category, e.g. software engineer | data scientist>"\n'
+        '  "role_type": "<short normalised role category, e.g. software engineer | data scientist>",\n'
+        '  "sponsors_visa": <true if posting says they sponsor visas/H-1B; false if posting says '
+        '"must be authorized to work" or "no sponsorship"; null if not mentioned>\n'
         "}\n\n"
         "Guidelines:\n"
         "- required_skills: explicitly required (up to 10)\n"
@@ -224,11 +226,43 @@ async def generate_field_answer(
     return await claude_call(prompt)
 
 
+def _build_academic_block(profile: dict) -> str:
+    """Build an academic background context string for LLM prompts.
+
+    Args:
+        profile: Candidate profile dict (already sanitized).
+
+    Returns:
+        A formatted string with research-to-industry bridging instructions,
+        or an empty string when no academic section is present.
+    """
+    acad = profile.get("academic", {})
+    if not acad:
+        return ""
+    areas = ", ".join(acad.get("research_areas", []))
+    thesis = acad.get("thesis", "")
+    pubs: list[str] = acad.get("publications", [])
+    return (
+        f"\nCANDIDATE BACKGROUND: Grad student / recent grad from "
+        f"{acad.get('university', 'university')}, {acad.get('degree', 'grad')} in "
+        f"{acad.get('department', 'technical field')}. "
+        + (f"Research: {areas}. " if areas else "")
+        + (f"Thesis: {thesis}. " if thesis else "")
+        + (f"Publications: {'; '.join(pubs[:2])}. " if pubs else "")
+        + "\nIMPORTANT: Explicitly bridge this candidate's research background to "
+        "the industry role. Show how research skills translate to the company's "
+        "problems. Connect specific research work to specific job responsibilities. "
+        "Don't just list skills.\n"
+    )
+
+
 async def tailor_resume(job_analysis: JobAnalysis, profile: dict) -> str:
     """Generate a tailored resume in plain Markdown for a specific role.
 
     Reorders and rephrases the candidate's real experience to best match the job,
     emphasizing relevant skills and using ATS keywords. Never invents facts.
+    When the profile includes an academic section, research experience is explicitly
+    bridged to the industry role.
 
     Args:
         job_analysis: Analyzed job posting.
@@ -240,10 +274,12 @@ async def tailor_resume(job_analysis: JobAnalysis, profile: dict) -> str:
     safe_profile = _sanitize_profile(profile)
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
     tailoring_context = _build_tailoring_context(job_analysis)
+    academic_block = _build_academic_block(safe_profile)
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
         f"{tailoring_context}\n"
+        f"{academic_block}"
         f"PROFILE:\n{profile_str}\n\n"
         "Generate a tailored resume in Markdown for this specific role. Follow these rules:\n"
         "1. Start with the candidate's name and contact info (email, phone, location, LinkedIn/GitHub if present).\n"
@@ -310,7 +346,9 @@ async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str
 
     The letter is structured to open by connecting a specific candidate experience
     to a specific job responsibility, weave in ATS keywords naturally, and close
-    by referencing what makes this particular role distinctive.
+    by referencing what makes this particular role distinctive. When the profile
+    includes an academic section, research experience is explicitly bridged to the
+    industry role.
 
     Args:
         job_analysis: Expanded analysis of the job posting including tone and keywords.
@@ -322,10 +360,12 @@ async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str
     safe_profile = _sanitize_profile(profile)
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
     tailoring_context = _build_tailoring_context(job_analysis)
+    academic_block = _build_academic_block(safe_profile)
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
         f"{tailoring_context}\n"
+        f"{academic_block}"
         f"PROFILE:\n{profile_str}\n\n"
         "Write a cover letter for this role following these exact rules:\n"
         "1. Exactly 3 paragraphs — no more, no less.\n"

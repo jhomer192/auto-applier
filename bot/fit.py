@@ -117,12 +117,23 @@ def evaluate_fit(job: JobAnalysis, prefs: JobPreferences) -> FitReport:
         else:
             report.arrangement_note = f"Arrangement: {job.work_arrangement} ✅"
 
+    # --- Visa sponsorship ---
+    if prefs.requires_sponsorship:
+        if job.sponsors_visa is False:
+            report.hard_pass = True
+            report.hard_pass_reason = "Job explicitly does not offer visa sponsorship"
+            return report
+        if job.sponsors_visa is None:
+            report.sponsorship_ok = False
+            report.sponsorship_note = "Sponsorship not mentioned — verify before applying"
+
     # --- Auto-apply ---
     all_checks_pass = (
         report.salary_ok
         and report.role_ok
         and report.seniority_ok
         and report.arrangement_ok
+        and report.sponsorship_ok
     )
     if (
         prefs.auto_apply_threshold > 0
@@ -134,7 +145,7 @@ def evaluate_fit(job: JobAnalysis, prefs: JobPreferences) -> FitReport:
     return report
 
 
-def fit_summary_lines(job: JobAnalysis, report: FitReport) -> list[str]:
+def fit_summary_lines(job: JobAnalysis, report: FitReport, prefs: JobPreferences | None = None) -> list[str]:
     """Build a list of display lines for the Telegram Y/N prompt."""
     lines: list[str] = []
 
@@ -153,6 +164,13 @@ def fit_summary_lines(job: JobAnalysis, report: FitReport) -> list[str]:
     # Arrangement
     if report.arrangement_note:
         lines.append(report.arrangement_note)
+
+    # Sponsorship (only show when user needs it)
+    if prefs is not None and prefs.requires_sponsorship:
+        if report.sponsorship_note:
+            lines.append(report.sponsorship_note + " ⚠️")
+        elif job.sponsors_visa is True:
+            lines.append("Visa sponsorship: confirmed in posting ✅")
 
     # Fallback for known fields when no preference set
     if not report.salary_note and (job.salary_min or job.salary_max):

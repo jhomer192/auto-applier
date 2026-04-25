@@ -100,6 +100,11 @@ def main() -> None:
     profile["education"] = collect_education()
 
     print("")
+    acad = _collect_academic()
+    if acad:
+        profile["academic"] = acad
+
+    print("")
     print("-- Skills --")
     skills_raw = ask("Top skills, comma-separated (e.g. Python, SQL, React)")
     profile["skills"] = [s.strip() for s in skills_raw.split(",") if s.strip()]
@@ -142,6 +147,61 @@ def main() -> None:
     print("You can also update preferences at any time with /prefs in Telegram.")
 
     _setup_gmail_env()
+
+
+def _collect_academic() -> dict:
+    """Collect academic background for grad students / recent grads.
+
+    Returns:
+        Dict with academic details, or empty dict if user skips the section.
+    """
+    gate = input("Are you a grad student or recent grad? (y/N): ").strip().lower()
+    if gate not in ("y", "yes"):
+        return {}
+
+    print("")
+    print("-- Academic Background --")
+
+    acad: dict = {}
+    acad["university"] = ask("University name", required=True)
+    acad["department"] = ask("Department / field of study", required=True)
+
+    print("  Degree type options: BS, MS, PhD, MBA, other")
+    acad["degree"] = ask("Degree type (e.g. PhD, MS)", required=True)
+    acad["graduation_year"] = ask("Graduation year (actual or expected)")
+
+    areas_raw = ask("Research areas, comma-separated (e.g. NLP, distributed systems)")
+    acad["research_areas"] = [a.strip() for a in areas_raw.split(",") if a.strip()] if areas_raw else []
+
+    thesis = ask("Thesis or dissertation title (Enter to skip)")
+    if thesis:
+        acad["thesis"] = thesis
+
+    print("  Publications: paste one title/venue per line. Leave blank to finish.")
+    pubs: list[str] = []
+    while True:
+        line = input("  Publication (blank to finish): ").strip()
+        if not line:
+            break
+        pubs.append(line)
+    if pubs:
+        acad["publications"] = pubs
+
+    gpa_raw = ask("GPA (Enter to skip; worth including if 3.5+)")
+    if gpa_raw:
+        acad["gpa"] = gpa_raw
+
+    print("  TA / RA positions: one per line, blank to finish.")
+    positions: list[str] = []
+    while True:
+        line = input("  TA/RA position (blank to finish): ").strip()
+        if not line:
+            break
+        positions.append(line)
+    if positions:
+        acad["ta_ra_positions"] = positions
+
+    return acad
 
 
 def _collect_preferences() -> dict:
@@ -224,6 +284,12 @@ def _collect_preferences() -> dict:
             prefs["max_applies_per_day"] = max(0, int(max_day_raw))
         except ValueError:
             print("  Skipping — invalid number.")
+
+    print("")
+    needs_sponsorship = input(
+        "Will you need visa sponsorship (H-1B or similar) to work in the US? (y/N): "
+    ).strip().lower()
+    prefs["requires_sponsorship"] = needs_sponsorship in ("y", "yes")
 
     return prefs
 

@@ -69,6 +69,9 @@ def load_preferences(profile: dict) -> JobPreferences:
             return [v.strip().lower() for v in val.split(",") if v.strip()]
         return []
 
+    requires_sponsorship_raw = raw.get("requires_sponsorship", False)
+    requires_sponsorship = bool(requires_sponsorship_raw) if requires_sponsorship_raw is not None else False
+
     return JobPreferences(
         desired_roles=_strlist("desired_roles"),
         min_salary=_int("min_salary"),
@@ -80,6 +83,7 @@ def load_preferences(profile: dict) -> JobPreferences:
         min_apply_gap_minutes=_int("min_apply_gap_minutes") or 4,
         max_apply_gap_minutes=_int("max_apply_gap_minutes") or 8,
         max_applies_per_day=_int("max_applies_per_day") or 30,
+        requires_sponsorship=requires_sponsorship,
     )
 
 
@@ -102,6 +106,7 @@ def save_preferences(profile: dict, prefs: JobPreferences, path: str) -> None:
         "min_apply_gap_minutes": prefs.min_apply_gap_minutes,
         "max_apply_gap_minutes": prefs.max_apply_gap_minutes,
         "max_applies_per_day": prefs.max_applies_per_day,
+        "requires_sponsorship": prefs.requires_sponsorship,
     }
     with open(path, "w") as f:
         yaml.dump(profile, f, default_flow_style=False, allow_unicode=True)

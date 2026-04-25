@@ -63,6 +63,7 @@ class JobPreferences:
     min_apply_gap_minutes: int = 4  # minimum minutes between application submissions
     max_apply_gap_minutes: int = 8  # upper bound for randomised gap
     max_applies_per_day: int = 30   # daily application cap (0 = no cap)
+    requires_sponsorship: bool = False  # True if candidate needs H-1B or similar visa sponsorship
 
 
 @dataclass
@@ -86,6 +87,8 @@ class JobAnalysis:
     seniority_level: str = "unknown"  # "junior"|"mid"|"senior"|"staff"|"principal"|"director"|"unknown"
     work_arrangement: str = "unknown" # "remote"|"hybrid"|"onsite"|"unknown"
     role_type: str = ""               # normalised role category e.g. "software engineer"
+    # Visa sponsorship intelligence from posting
+    sponsors_visa: bool | None = None  # True=explicitly sponsors; False=explicitly no sponsorship; None=not mentioned
 
 
 @dataclass
@@ -105,6 +108,9 @@ class FitReport:
     hard_pass_reason: str = ""
     # auto_apply: skip Y/N and go straight to submit
     auto_apply: bool = False
+    # Visa sponsorship
+    sponsorship_ok: bool = True
+    sponsorship_note: str = ""
 
 
 @dataclass

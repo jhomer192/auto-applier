@@ -430,14 +430,15 @@ async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View and update job preferences.
 
-    /prefs                    — show current preferences
-    /prefs roles <r1,r2,...>  — set desired role types
+    /prefs                       — show current preferences
+    /prefs roles <r1,r2,...>     — set desired role types
     /prefs salary <min> [target] — set salary floor and target (annual USD)
     /prefs seniority <s1,s2,...> — set acceptable seniority levels
     /prefs arrangement <r,h,o>   — set work arrangement preference
     /prefs autoapply <0-100>     — set auto-apply threshold (0 = disabled)
     /prefs exclude <company>     — add company to exclusion list
     /prefs unexclude <company>   — remove from exclusion list
+    /prefs sponsorship yes|no    — toggle visa sponsorship requirement
     """
     if not _auth(update, context):
         return
@@ -458,6 +459,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         auto = f"score >= {prefs.auto_apply_threshold}" if prefs.auto_apply_threshold else "off"
         gap = f"{prefs.min_apply_gap_minutes}–{prefs.max_apply_gap_minutes} min"
         cap = str(prefs.max_applies_per_day) if prefs.max_applies_per_day else "30 (default)"
+        sponsorship = "yes (need sponsorship)" if prefs.requires_sponsorship else "no"
         await update.message.reply_text(
             "Current job preferences:\n\n"
             f"Roles: {roles}\n"
@@ -466,7 +468,8 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Seniority: {seniority}\n"
             f"Arrangement: {arrangement}\n"
             f"Excluded companies: {excluded}\n"
-            f"Auto-apply: {auto}\n\n"
+            f"Auto-apply: {auto}\n"
+            f"Visa sponsorship needed: {sponsorship}\n\n"
             "Rate limiting:\n"
             f"  Apply gap: {gap} (randomised)\n"
             f"  Daily cap: {cap} applications/day\n\n"
@@ -479,7 +482,8 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/prefs exclude Meta\n"
             "/prefs unexclude Meta\n"
             "/prefs pace 3 10    (min–max gap in minutes)\n"
-            "/prefs dailycap 20  (max applications per day)"
+            "/prefs dailycap 20  (max applications per day)\n"
+            "/prefs sponsorship yes|no"
         )
         return
 
@@ -625,10 +629,26 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.bot_data["profile"] = profile
         await update.message.reply_text(f"Daily cap set to {cap} applications/day.")
 
+    elif sub == "sponsorship":
+        if len(args) < 2 or args[1].lower() not in ("yes", "no"):
+            await update.message.reply_text("Usage: /prefs sponsorship yes|no")
+            return
+        prefs.requires_sponsorship = args[1].lower() == "yes"
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        if prefs.requires_sponsorship:
+            await update.message.reply_text(
+                "Visa sponsorship requirement set to yes.\n"
+                "Jobs that explicitly don't sponsor will be hard-passed. "
+                "Jobs that don't mention it will get a warning."
+            )
+        else:
+            await update.message.reply_text("Visa sponsorship requirement set to no.")
+
     else:
         await update.message.reply_text(
             "Unknown subcommand. Options: roles, salary, seniority, arrangement, "
-            "autoapply, exclude, unexclude, pace, dailycap"
+            "autoapply, exclude, unexclude, pace, dailycap, sponsorship"
         )
 
 
@@ -832,7 +852,7 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
 
     # Auto-apply: threshold met, all fit checks pass, no fields needing user input
     if fit.auto_apply and not needs_user_input:
-        fit_lines = fit_summary_lines(job_analysis, fit)
+        fit_lines = fit_summary_lines(job_analysis, fit, prefs)
         summary = "\n".join(fit_lines)
         await update.message.reply_text(
             f"Auto-applying to *{job_info.title}* at *{job_info.company}* "
@@ -844,7 +864,7 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         return
 
     # Build informed Y/N prompt
-    fit_lines = fit_summary_lines(job_analysis, fit)
+    fit_lines = fit_summary_lines(job_analysis, fit, prefs)
     fit_block = ("\n" + "\n".join(fit_lines)) if fit_lines else ""
     cover_preview = ""
     if cover_letter_text:
