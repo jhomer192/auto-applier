@@ -4,6 +4,8 @@ Send a job URL to your phone. Your bot reads the posting, evaluates the fit agai
 
 This guide assumes you have never used a terminal, never set up a server, and have no idea what any of this means. That's fine. Every step is numbered, every command is copy-paste, and every confusing moment is called out ahead of time.
 
+> **Grad students and recent grads:** This bot was built with you in mind. During setup it asks about your research areas, thesis, publications, and whether you need visa sponsorship. It uses that context to write cover letters that bridge your academic work to industry roles — the hardest part of academic-to-industry applications. It also auto-skips jobs that explicitly say "no sponsorship" if you need it.
+
 ---
 
 ## Features
@@ -38,6 +40,8 @@ Use `/resume <id>` or `/coverletter <id>` to pull up the tailored resume or cove
 ### Profile building
 The `/profile` command runs a short achievement interview. Your answers are used to personalize every resume and cover letter the bot generates.
 
+During setup, the bot also asks about your **academic background** — research areas, thesis topic, publications, GPA, and degree program. Cover letters are written to connect your research to the specific problems the role works on, not just list skills. If you need visa sponsorship, set `/prefs sponsorship yes` and the bot will hard-skip any job that explicitly declines to sponsor.
+
 ### Full anti-detection
 Human-like typing and mouse movement, randomized browser fingerprints, rate limiting, and configurable daily application caps.
 
@@ -48,10 +52,15 @@ Human-like typing and mouse movement, randomized browser fingerprints, rate limi
 | Thing | Cost | Why you need it |
 |---|---|---|
 | DigitalOcean account | $6/month | A computer in the cloud that runs the bot 24/7, even when your laptop is off |
-| Claude Max plan | $100/month | The AI brain that reads job postings and fills out forms |
+| Claude Pro or Max plan | $20 or $100/month | The AI brain that reads job postings and fills out forms |
 | Telegram app | Free | How you send URLs to the bot and get back results |
 
-**Total ongoing cost: ~$106/month.** You can cancel either service any time.
+| Plan | Monthly cost | Best for |
+|---|---|---|
+| Claude Pro + DigitalOcean $6 | ~$26/month | Grad students applying to 5–15 jobs/day |
+| Claude Max + DigitalOcean $6 | ~$106/month | Heavy users, no usage limits |
+
+**Claude Pro works for most grad students. If you hit usage limits, upgrade to Max.** You can cancel either service any time.
 
 ---
 
@@ -298,6 +307,7 @@ These control how the bot evaluates and handles jobs:
 - `/prefs unexclude <company>` — remove a company from that list
 - `/prefs pace <min> <max>` — set the min/max gap in minutes between applications (e.g. `/prefs pace 10 30`)
 - `/prefs dailycap <n>` — maximum applications per day (e.g. `/prefs dailycap 15`)
+- `/prefs sponsorship yes|no` — if `yes`, the bot hard-skips jobs that explicitly say they won't sponsor visas
 - `/prefs show` — display all your current preferences
 
 ### Profile and history commands
@@ -364,6 +374,16 @@ sudo systemctl restart auto-applier
 
 **My auto-apply threshold isn't working**
 Use `/prefs show` to confirm the `autoapply` value is set to what you expect. A value of 0 means auto-apply is disabled. Make sure you've also set your role and salary preferences — the bot needs those to compute a match score.
+
+**My cover letter doesn't mention my research**
+Make sure you answered the academic background questions during setup. If you skipped them, add an `academic:` section to `profile.yaml` with the following fields: `university`, `department`, `degree`, `research_areas` (a list), and optionally `thesis`. Then restart the service:
+
+```bash
+sudo systemctl restart auto-applier
+```
+
+**Bot applied to a job that won't sponsor visas**
+Run `/prefs sponsorship yes` in Telegram. The bot will hard-skip future jobs that explicitly decline to sponsor. Jobs that don't mention sponsorship will still come through with a warning.
 
 ---
 
