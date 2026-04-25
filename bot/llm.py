@@ -114,8 +114,8 @@ def _extract_json(raw: str) -> str:
     return stripped  # caller will get a json.JSONDecodeError with useful context
 
 
-async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
-    """Run `claude -p <prompt>` in a thread to avoid blocking the event loop.
+async def claude_call(prompt: str) -> str:
+    """Run `claude -p -` in a thread, passing the prompt via stdin.
 
     Retries up to 3 times on transient failures (timeout, empty output, non-zero
     exit that looks like a rate-limit or overload error). Permanent errors (e.g.
@@ -130,7 +130,7 @@ async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
     def _run() -> str:
         try:
             result = subprocess.run(
-                ["claude", "-p", "--max-tokens", str(max_tokens), "-"],
+                ["claude", "-p", "-"],
                 input=prompt,
                 capture_output=True,
                 text=True,
@@ -492,7 +492,7 @@ async def tailor_resume(job_analysis: JobAnalysis, profile: dict) -> str:
         "7. Keep total length under 700 words.\n\n"
         "Tailored resume (Markdown):"
     )
-    return await claude_call(prompt, max_tokens=1200)
+    return await claude_call(prompt)
 
 
 async def extract_achievements(answers: list[tuple[str, str]], profile: dict) -> str:
@@ -535,7 +535,7 @@ async def extract_achievements(answers: list[tuple[str, str]], profile: dict) ->
         "- Output ONLY the YAML block, no explanation.\n\n"
         "YAML:"
     )
-    return await claude_call(prompt, max_tokens=800)
+    return await claude_call(prompt)
 
 
 async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str:

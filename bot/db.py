@@ -137,16 +137,6 @@ class ApplicationDB:
             rows = await cursor.fetchall()
             return [_row_to_record(row) for row in rows]
 
-    async def count_applied_today(self, today_start: str) -> int:
-        """Return the number of 'applied' records since today_start (ISO datetime string)."""
-        async with aiosqlite.connect(self._path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM applications WHERE status='applied' AND applied_at >= ?",
-                (today_start,),
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
     async def get_by_id(self, app_id: int) -> ApplicationRecord | None:
         async with aiosqlite.connect(self._path) as db:
             db.row_factory = aiosqlite.Row

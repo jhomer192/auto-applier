@@ -166,8 +166,6 @@ If exit 0: tell the user:
 > - `/prefs arrangement <remote|hybrid|onsite>` — set work arrangement
 > - `/prefs autoapply <score>` — auto-apply threshold (0 = disabled)
 > - `/prefs exclude <company>` / `/prefs unexclude <company>`
-> - `/prefs pace <min> <max>` — application gap in minutes
-> - `/prefs dailycap <n>` — max applications per day
 > - `/prefs show` — display current preferences
 >
 > **Passive discovery commands:**
@@ -235,8 +233,6 @@ To enable:
 - `/prefs seniority <level>` — seniority level preference
 - `/prefs arrangement <remote|hybrid|onsite>` — work arrangement preference
 - `/prefs exclude <company>` / `/prefs unexclude <company>` — manage hard-pass list
-- `/prefs pace <min> <max>` — min/max gap in minutes between applications
-- `/prefs dailycap <n>` — max applications per day
 - `/prefs show` — display all current preferences
 
 **Profile, branding & history:**

@@ -26,7 +26,6 @@ from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
 from bot.models import ApplicationRecord, QueuedJob, SavedSearch
 from bot.profile import load_preferences
-from bot.ratelimit import enforce_rate_limit, RateLimitExceeded
 from bot.scraper import field_answer_hint
 from bot.telegram_bot import _build_batch_message, PENDING_BATCH
 
@@ -233,31 +232,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         if cover_field and not cover_field.answer and cover_letter:
             cover_field.answer = cover_letter
 
-        # ----- Step 7: Rate-limit gate -----
-        async def _notify_wait(msg: str) -> None:
-            try:
-                await bot.send_message(chat_id=chat_id, text=msg)
-            except Exception:
-                pass
-
-        try:
-            await enforce_rate_limit(
-                db,
-                min_gap_minutes=prefs.min_apply_gap_minutes,
-                max_gap_minutes=prefs.max_apply_gap_minutes,
-                daily_cap=prefs.max_applies_per_day,
-                notify=_notify_wait,
-            )
-        except RateLimitExceeded as e:
-            logger.warning("auto_apply: rate limit hit: %s — pausing queue processing", e)
-            try:
-                await bot.send_message(chat_id=chat_id, text=str(e))
-            except Exception:
-                pass
-            # This job and all remaining stay pending in DB; nothing to extend
-            break
-
-        # ----- Step 8: Submit -----
+        # ----- Step 7: Submit -----
         resume_path = profile.get("resume_path", "")
         try:
             result = await adapter.submit_application(queued_job.url, fields, resume_path)
@@ -287,7 +262,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
             logger.info("auto_apply: already applied — %s", queued_job.url)
             continue
 
-        # ----- Step 9: Record -----
+        # ----- Step 8: Record -----
         submitted_json = json.dumps(result.submitted_fields)
         record = ApplicationRecord(
             url=queued_job.url,
@@ -305,7 +280,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         app_id = await db.insert_application(record)
         await db.update_queued_job_status(queued_job.id, "applied" if result.success else "dismissed")
 
-        # ----- Step 10: Notify -----
+        # ----- Step 9: Notify -----
         fit_lines = fit_summary_lines(job_analysis, fit, prefs)
         fit_summary = ("\n" + "\n".join(fit_lines)) if fit_lines else ""
 

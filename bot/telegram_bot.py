@@ -22,7 +22,6 @@ from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.profile import load_preferences, save_preferences
-from bot.ratelimit import enforce_rate_limit, RateLimitExceeded
 from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
@@ -482,8 +481,6 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         arrangement = ", ".join(prefs.work_arrangement) if prefs.work_arrangement else "any"
         excluded = ", ".join(prefs.excluded_companies) if prefs.excluded_companies else "none"
         auto = f"score >= {prefs.auto_apply_threshold}" if prefs.auto_apply_threshold else "off"
-        gap = f"{prefs.min_apply_gap_minutes}–{prefs.max_apply_gap_minutes} min"
-        cap = str(prefs.max_applies_per_day) if prefs.max_applies_per_day else "unlimited"
         sponsorship = "yes (need sponsorship)" if prefs.requires_sponsorship else "no"
         auto_search = "on" if prefs.auto_search else "off"
         await update.message.reply_text(
@@ -497,9 +494,6 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Excluded companies: {excluded}\n"
             f"Auto-apply: {auto}\n"
             f"Visa sponsorship needed: {sponsorship}\n\n"
-            "Rate limiting:\n"
-            f"  Apply gap: {gap} (randomised)\n"
-            f"  Daily cap: {cap} applications/day\n\n"
             "Update with:\n"
             "/prefs autosearch on|off\n"
             "/prefs roles Backend Engineer,Staff Engineer\n"
@@ -509,8 +503,6 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/prefs autoapply 85\n"
             "/prefs exclude Meta\n"
             "/prefs unexclude Meta\n"
-            "/prefs pace 3 10    (min–max gap in minutes)\n"
-            "/prefs dailycap 20  (max applications per day)\n"
             "/prefs sponsorship yes|no"
         )
         return
@@ -618,45 +610,6 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.bot_data["profile"] = profile
         await update.message.reply_text(f"Removed from exclusion list: {company}")
 
-    elif sub == "pace":
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Usage: /prefs pace <min_minutes> [max_minutes]\n"
-                "Example: /prefs pace 3 8 — wait 3–8 minutes between applications"
-            )
-            return
-        try:
-            min_gap = int(args[1])
-            max_gap = int(args[2]) if len(args) > 2 else min_gap + 4
-            if min_gap < 1 or max_gap < min_gap:
-                raise ValueError
-        except ValueError:
-            await update.message.reply_text("Both values must be positive integers, max >= min.")
-            return
-        prefs.min_apply_gap_minutes = min_gap
-        prefs.max_apply_gap_minutes = max_gap
-        save_preferences(profile, prefs, profile_path)
-        context.bot_data["profile"] = profile
-        await update.message.reply_text(
-            f"Apply pace set: {min_gap}–{max_gap} minutes between submissions."
-        )
-
-    elif sub == "dailycap":
-        if len(args) < 2:
-            await update.message.reply_text("Usage: /prefs dailycap <number>")
-            return
-        try:
-            cap = int(args[1])
-            if cap < 1:
-                raise ValueError
-        except ValueError:
-            await update.message.reply_text("Daily cap must be a positive integer.")
-            return
-        prefs.max_applies_per_day = cap
-        save_preferences(profile, prefs, profile_path)
-        context.bot_data["profile"] = profile
-        await update.message.reply_text(f"Daily cap set to {cap} applications/day.")
-
     elif sub == "sponsorship":
         if len(args) < 2 or args[1].lower() not in ("yes", "no"):
             await update.message.reply_text("Usage: /prefs sponsorship yes|no")
@@ -695,7 +648,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text(
             "Unknown subcommand. Options: roles, salary, seniority, arrangement, "
-            "autoapply, autosearch, exclude, unexclude, pace, dailycap, sponsorship"
+            "autoapply, autosearch, exclude, unexclude, sponsorship"
         )
 
 
@@ -1122,7 +1075,7 @@ async def _compose_offer_reply(
         "unless the candidate's intent specifies a different amount.\n"
         "Use the candidate's intent exactly — do not invent details."
     )
-    return await claude_call(prompt, max_tokens=400)
+    return await claude_call(prompt)
 
 
 async def _compose_scheduling_reply(
@@ -1150,7 +1103,7 @@ async def _compose_scheduling_reply(
         "Confirm interest in the role, share the availability exactly as given, "
         "and close with a thank-you."
     )
-    return await claude_call(prompt, max_tokens=400)
+    return await claude_call(prompt)
 
 
 async def notify_new_emails(app: Application) -> None:
@@ -1469,25 +1422,6 @@ async def _submit_application(
         await update.message.reply_text(
             "Already have a successful application on record for this job — skipping to avoid duplicate."
         )
-        context.user_data.pop(PENDING_JOB, None)
-        return
-
-    # Enforce rate limit before submitting
-    prefs = load_preferences(profile)
-
-    async def _notify_wait(msg: str) -> None:
-        await update.message.reply_text(msg)
-
-    try:
-        await enforce_rate_limit(
-            db,
-            min_gap_minutes=prefs.min_apply_gap_minutes,
-            max_gap_minutes=prefs.max_apply_gap_minutes,
-            daily_cap=prefs.max_applies_per_day,
-            notify=_notify_wait,
-        )
-    except RateLimitExceeded as e:
-        await update.message.reply_text(str(e))
         context.user_data.pop(PENDING_JOB, None)
         return
 
