@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Apply — Backend Engineer at Widget Inc</title>
+</head>
+<body>
+  <h2>Backend Engineer</h2>
+  <div id="application-form">
+    <form action="/lever_success.html" method="get">
+      <div class="application-field">
+        <label for="name">Full Name *</label>
+        <input type="text" id="name" name="name" required>
+      </div>
+      <div class="application-field">
+        <label for="email">Email *</label>
+        <input type="email" id="email" name="email" required>
+      </div>
+      <div class="application-field">
+        <label for="phone">Phone</label>
+        <input type="tel" id="phone" name="phone">
+      </div>
+      <div class="application-field">
+        <label for="org">Current Company</label>
+        <input type="text" id="org" name="org">
+      </div>
+      <div class="application-field">
+        <label for="linkedin">LinkedIn URL</label>
+        <input type="url" id="linkedin" name="urls[LinkedIn]">
+      </div>
+      <div class="application-field">
+        <label for="resume-upload">Resume *</label>
+        <input type="file" id="resume-upload" data-qa="resume-upload-input" name="resume" required>
+      </div>
+      <div class="application-field">
+        <label for="comments">Cover Letter / Additional Info</label>
+        <textarea id="comments" name="comments" rows="6"></textarea>
+      </div>
+      <!-- Lever-style hidden fields -->
+      <input type="hidden" name="source" value="Organic">
+      <button type="submit" data-qa="btn-submit">Submit Application</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -53,8 +53,8 @@ _LOCALES = ["en-US", "en-US", "en-US", "en-GB", "en-CA"]  # weighted toward en-U
 
 _TIMEZONES = [
     "America/New_York", "America/New_York", "America/Chicago",
-    "America/Denver", "America/Los_Angeles", "America/Seattle",
-    "America/Phoenix", "America/Boston",
+    "America/Denver", "America/Los_Angeles", "America/Los_Angeles",
+    "America/Phoenix", "America/New_York",
 ]
 
 # Injected into every page to suppress webdriver detection signals
@@ -179,18 +179,18 @@ async def human_type(page, selector: str, text: str) -> None:
 
     Always clears the field first with triple-click.
     """
-    if not text:
-        return
-
     # Click to focus
     await page.click(selector)
     await asyncio.sleep(random.uniform(0.12, 0.35))
 
-    # Select all existing content
+    # Select all existing content and clear it
     await page.keyboard.press("Control+a")
     await asyncio.sleep(random.uniform(0.05, 0.12))
     await page.keyboard.press("Delete")
     await asyncio.sleep(random.uniform(0.05, 0.15))
+
+    if not text:
+        return  # empty string: clear only, no typing
 
     if len(text) <= HUMAN_TYPE_MAX_CHARS:
         # Full human-speed typing

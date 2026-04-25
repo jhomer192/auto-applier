@@ -125,6 +125,26 @@ class GreenhouseAdapter:
                         error="Bot challenge (CAPTCHA) detected — cannot proceed automatically.",
                     )
 
+                # ── Pre-fill: abort if blocking required fields have no answer ────
+                unanswered_blocking = [
+                    f.label for f in fields
+                    if f.required and not f.answer
+                    and any(kw in f.label.lower() for kw in ("email", "name", "resume", "cv"))
+                ]
+                if unanswered_blocking:
+                    logger.error(
+                        "Greenhouse: blocking required fields have no answer — aborting: %s",
+                        unanswered_blocking,
+                    )
+                    return ApplicationResult(
+                        success=False, screenshot_path=None, submitted_fields=submitted,
+                        error=(
+                            f"Aborted: blocking required fields have no answer: "
+                            f"{', '.join(unanswered_blocking)}. Nothing was submitted."
+                        ),
+                        missing_fields=unanswered_blocking,
+                    )
+
                 # ── Fill fields ───────────────────────────────────────────────────
                 for field in fields:
                     if not field.answer:

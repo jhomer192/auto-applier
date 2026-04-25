@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Human Interaction Test Page</title>
+</head>
+<body>
+  <h1>Interaction Test</h1>
+
+  <div>
+    <label for="text_input">Text Input</label>
+    <input type="text" id="text_input" name="text_input">
+  </div>
+
+  <div>
+    <label for="long_textarea">Long Text Area</label>
+    <textarea id="long_textarea" name="long_textarea" rows="4" cols="50"></textarea>
+  </div>
+
+  <div id="click_target" style="width:200px;height:50px;background:#eee;cursor:pointer;">
+    Click Me
+  </div>
+  <div id="click_result" style="display:none;">Clicked!</div>
+
+  <button id="submit_btn" type="button" onclick="document.getElementById('click_result').style.display='block'">
+    Submit
+  </button>
+
+  <script>
+    document.getElementById('click_target').addEventListener('click', function() {
+      document.getElementById('click_result').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

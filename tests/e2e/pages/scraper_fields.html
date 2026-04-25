@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Field Scraper Test Page</title>
+</head>
+<body>
+  <h1>Test Form</h1>
+  <form id="test-form">
+    <!-- Standard label-for -->
+    <div>
+      <label for="first_name">First Name</label>
+      <input type="text" id="first_name" name="first_name" required>
+    </div>
+
+    <!-- aria-label -->
+    <div>
+      <input type="email" id="email_addr" aria-label="Email Address" required>
+    </div>
+
+    <!-- Textarea with label -->
+    <div>
+      <label for="bio">Cover Letter</label>
+      <textarea id="bio" name="bio" rows="4"></textarea>
+    </div>
+
+    <!-- Select / dropdown -->
+    <div>
+      <label for="experience">Years of Experience</label>
+      <select id="experience" name="experience">
+        <option value="">Choose one</option>
+        <option value="0-2">0-2 years</option>
+        <option value="3-5">3-5 years</option>
+        <option value="6+">6+ years</option>
+      </select>
+    </div>
+
+    <!-- Checkbox -->
+    <div>
+      <label for="remote_ok">Open to remote?</label>
+      <input type="checkbox" id="remote_ok" name="remote_ok">
+    </div>
+
+    <!-- File input -->
+    <div>
+      <label for="resume_file">Resume (PDF)</label>
+      <input type="file" id="resume_file" name="resume_file" required>
+    </div>
+
+    <!-- EEO field — should be detected as EEO -->
+    <div>
+      <label for="gender">Gender (voluntary)</label>
+      <select id="gender" name="gender">
+        <option value="">Prefer not to say</option>
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+        <option value="non-binary">Non-binary</option>
+      </select>
+    </div>
+
+    <!-- Noise fields — should be skipped -->
+    <input type="hidden" name="utf8" value="✓">
+    <input type="hidden" name="authenticity_token" value="abc123">
+    <input type="text" name="search" placeholder="Search" aria-label="Search">
+    <input type="hidden" id="csrf_token" name="csrf_token" value="xyz">
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
