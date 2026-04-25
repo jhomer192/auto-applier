@@ -1,8 +1,43 @@
-# Auto Job Applier — Complete Beginner Setup Guide
+# Auto Job Applier
 
-Send a job URL to your phone. Your bot reads the posting, evaluates the fit against your preferences, generates a tailored resume and cover letter, fills out the application, and asks you to confirm — or just submits automatically if the match score is high enough. You just tap Y or N.
+Finds jobs, writes tailored applications, and submits them while you sleep. You set your target roles and a score threshold — the bot searches LinkedIn every 30 minutes, analyzes each posting with Claude, and auto-applies to anything above your threshold. Everything else comes to you as a Y/N prompt in Telegram.
 
-This guide assumes you have never used a terminal, never set up a server, and have no idea what any of this means. That's fine. Every step is numbered, every command is copy-paste, and every confusing moment is called out ahead of time.
+---
+
+## Install
+
+SSH into a Ubuntu VPS (a $6/month [DigitalOcean](https://digitalocean.com) Droplet works great), then:
+
+```bash
+git clone https://github.com/jhomer192/auto-applier.git && cd auto-applier && bash setup.sh
+```
+
+The setup wizard handles everything: Python deps, your candidate profile, Telegram bot, LinkedIn login, systemd service, and autonomous mode configuration. Takes about 10 minutes.
+
+> **No VPS yet?** Follow [Part 1–3](#part-1--get-a-server) below — it walks you through creating one even if you've never used a terminal.
+
+---
+
+## How it works
+
+```
+You set:  /prefs roles Software Engineer,Backend Engineer
+          /prefs autoapply 80
+
+Bot does: ┌─ every 30 min ─────────────────────────────────────┐
+          │ 1. Search LinkedIn for your target roles            │
+          │ 2. Score each posting (fit, salary, sponsorship)    │
+          │ 3. Score ≥ 80 → fill form + submit, notify you     │
+          │ 4. Score < 80 → send Y/N prompt to Telegram         │
+          │ 5. Hard pass → silently skip                        │
+          └────────────────────────────────────────────────────┘
+```
+
+---
+
+## Beginner setup guide
+
+This section assumes you have never used a terminal, never set up a server, and have no idea what any of this means. That's fine. Every step is numbered, every command is copy-paste, and every confusing moment is called out ahead of time.
 
 > **Grad students and recent grads:** This bot was built with you in mind. During setup it asks about your research areas, thesis, publications, and whether you need visa sponsorship. It uses that context to write cover letters that bridge your academic work to industry roles — the hardest part of academic-to-industry applications. It also auto-skips jobs that explicitly say "no sponsorship" if you need it.
 
@@ -191,51 +226,33 @@ This will print a URL. Copy it and open it in a browser on your computer. It wil
 
 ---
 
-## Part 4 — Get the bot code
+## Part 4 — Install the bot
 
-### Step 8 — Download the bot
+### Step 8 — Run the setup wizard
 
 ```bash
-git clone https://github.com/jhomer192/auto-applier.git && cd auto-applier
+git clone https://github.com/jhomer192/auto-applier.git && cd auto-applier && bash setup.sh
 ```
 
-> **What's `git clone`?** Git is a tool for downloading and tracking code. `clone` makes a full copy of the project from GitHub onto your server. The `&&` just means "and then also run the next command." The `cd auto-applier` part moves you into the folder that was just created.
+The script will:
+1. Install Python 3.11+ and all dependencies automatically
+2. Ask you questions to build your candidate profile (work history, skills, education, etc.)
+3. Walk you through creating a Telegram bot via BotFather and connecting it
+4. Optionally set up LinkedIn Easy Apply (requires a one-time browser login)
+5. Install the bot as a background service (starts automatically on reboot)
+6. Ask if you want autonomous mode (auto-apply threshold + role search)
 
-You'll see something like:
+**Answer honestly and completely** — your answers become your application profile. The bot never invents or adds anything; it only uses what you give it.
 
-```
-Cloning into 'auto-applier'...
-remote: Enumerating objects: 47, done.
-...
-```
-
-When it finishes and you see your prompt again, you're ready.
+The whole setup takes about 10 minutes.
 
 ---
 
-## Part 5 — Run setup
+## Part 5 — What to expect during setup
 
-This is the easy part. You're going to type one command and then have a conversation. Claude Code will read the project's setup guide and walk you through everything automatically — installing dependencies, building your profile, connecting Telegram, and starting the background service. Your job is just to answer its questions.
+At some point during setup, the script will ask you to create a Telegram bot. Here's what that looks like so you're ready.
 
-### Step 9 — Start Claude Code
-
-```bash
-claude
-```
-
-That's it. Press Enter.
-
-Claude Code will start and immediately begin setup. It'll install Python packages, run some scripts, and then start asking you questions. **Answer honestly and completely** — your answers become your application profile. Claude never invents or adds anything; it only uses what you give it.
-
-The whole setup conversation takes about 10 minutes.
-
----
-
-## Part 6 — What to expect during setup (so you're not surprised)
-
-At some point during setup, Claude Code will ask you to create a Telegram bot. Here's what that looks like so you're ready.
-
-### Step 10 — Create your Telegram bot via BotFather
+### Step 9 — Create your Telegram bot via BotFather
 
 1. Open Telegram on your phone (or at [web.telegram.org](https://web.telegram.org) on your computer)
 2. In the search bar, search for **@BotFather** — it has a blue checkmark. Tap on it
@@ -253,7 +270,7 @@ Claude Code will also ask for your **chat ID** — a number that tells the bot t
 
 ---
 
-## Part 7 — How to use it
+## Part 6 — How to use it
 
 Once setup is done, your bot is running in the background on your server. You don't need to leave any terminal windows open. The bot will keep running even if you close everything and turn off your laptop.
 
@@ -284,41 +301,52 @@ Reply Y to apply, N to skip
 
 > **What if it asks me something before submitting?** If the application form contains a question not covered by your profile — like "describe a time you showed leadership" — the bot will ask you before it submits. Just reply in Telegram and it will continue.
 
+### Autonomous mode
+
+Enable this and the bot finds and applies to jobs with no input from you:
+
+```
+/prefs roles Software Engineer, Backend Engineer
+/prefs autoapply 80
+/prefs autosearch on
+```
+
+- `/prefs autosearch on|off` — auto-generate LinkedIn searches from your desired roles (default: on)
+- `/prefs autoapply <0-100>` — auto-submit jobs scoring ≥ this threshold; 0 = always ask Y/N
+
 ### Job search commands
 
-Set up searches and the bot will ping you when new listings appear:
-
-- `/search add <query>` — start polling for a query (e.g. `/search add backend engineer`)
-- `/search add <query> in <location>` — limit to a location (e.g. `/search add backend engineer in Austin`)
+- `/search add <query>` — manually add a search (e.g. `/search add backend engineer`)
+- `/search add <query> in <location>` — with location (e.g. `/search add backend engineer in Austin`)
 - `/search list` — show all active searches
-- `/search stop <id>` — pause a search
+- `/search rm <id>` — pause a search
+- `/queue` — review pending discovered jobs, pick which to investigate
+- `/report` — application stats (today/week/all-time) + queue size + top companies
 
 ### Preference commands
 
-These control how the bot evaluates and handles jobs:
+- `/prefs roles <role1>, <role2>` — desired job titles (drives auto-search)
+- `/prefs salary <min> [target <t>]` — salary floor and optional target
+- `/prefs seniority <level>` — seniority preference (junior/mid/senior/staff/principal)
+- `/prefs arrangement <remote|hybrid|onsite>` — work arrangement preference
+- `/prefs exclude <company>` / `/prefs unexclude <company>` — hard-pass list
+- `/prefs pace <min> <max>` — gap in minutes between applications
+- `/prefs dailycap <n>` — maximum applications per day
+- `/prefs sponsorship yes|no` — hard-skip jobs that explicitly won't sponsor visas
+- `/prefs show` — display all current preferences
 
-- `/prefs roles <role1>, <role2>` — set your desired job titles (e.g. `/prefs roles Software Engineer, Backend Engineer`)
-- `/prefs salary <min>` — set your salary floor (e.g. `/prefs salary 120000`)
-- `/prefs salary <min> target <t>` — set floor and target (e.g. `/prefs salary 120000 target 160000`)
-- `/prefs seniority <level>` — set seniority preference (e.g. `/prefs seniority senior`)
-- `/prefs arrangement <remote|hybrid|onsite>` — set work arrangement preference
-- `/prefs autoapply <score>` — auto-submit if match score is at or above this number; set to 0 to disable (e.g. `/prefs autoapply 85`)
-- `/prefs exclude <company>` — add a company to your hard-pass list
-- `/prefs unexclude <company>` — remove a company from that list
-- `/prefs pace <min> <max>` — set the min/max gap in minutes between applications (e.g. `/prefs pace 10 30`)
-- `/prefs dailycap <n>` — maximum applications per day (e.g. `/prefs dailycap 15`)
-- `/prefs sponsorship yes|no` — if `yes`, the bot hard-skips jobs that explicitly say they won't sponsor visas
-- `/prefs show` — display all your current preferences
-
-### Profile and history commands
+### Profile, branding, and history
 
 - `/profile` — run the achievement interview to update your profile
-- `/resume <id>` — retrieve the tailored resume generated for a past application
-- `/coverletter <id>` — retrieve the cover letter generated for a past application
-- `/status` — see how many applications you've sent total
-- `/history` — list your recent applications with dates and scores
-- `/cancel` — dismiss the current pending item (a job confirmation or a recruiter email)
-- `/help` — show a quick reminder of available commands
+- `/linkedin [url]` — audit your LinkedIn profile with scored section-by-section feedback
+- `/website [minimal|dark|academic]` — generate a self-contained GitHub Pages portfolio site
+- `/website guide` — step-by-step deploy instructions
+- `/resume <id>` — retrieve the tailored resume for a past application
+- `/coverletter <id>` — retrieve the cover letter for a past application
+- `/status` — total application count
+- `/history` — recent applications with dates and scores
+- `/cancel` — dismiss the current pending item
+- `/help` — full command reference
 
 ---
 
