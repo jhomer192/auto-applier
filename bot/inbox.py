@@ -246,7 +246,7 @@ class GmailInbox:
         msg["References"] = f"{references} {own_message_id}".strip()
         msg.attach(MIMEText(body, "plain"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
             server.ehlo()
             server.starttls()
             server.login(self._address, self._app_password)

@@ -41,12 +41,14 @@ async def test_human_type_clears_existing_value(http_server, page):
     assert value == "new value"
 
 
-async def test_human_type_empty_string_clears_field(http_server, page):
+async def test_human_type_empty_string_is_noop(http_server, page):
+    """Empty string must not interact with the field — adapters skip no-answer fields."""
     await page.goto(f"{http_server}/human_interaction.html")
     await page.fill("#text_input", "something")
     await human_type(page, "#text_input", "")
     value = await page.input_value("#text_input")
-    assert value == ""
+    # Field should be untouched — no click, no clear
+    assert value == "something"
 
 
 async def test_human_type_long_text_uses_fill(http_server, page):

@@ -9,9 +9,17 @@ from bot.models import ApplicationRecord
 
 
 def _make_db(recent_records: list[ApplicationRecord]) -> MagicMock:
-    """Return a mock DB whose get_recent() yields the given records."""
+    """Return a mock DB whose get_recent() and count_applied_today() use the given records."""
     db = MagicMock()
     db.get_recent = AsyncMock(return_value=recent_records)
+
+    async def _count_applied_today(today_start: str) -> int:
+        return sum(
+            1 for r in recent_records
+            if r.status == "applied" and r.applied_at and r.applied_at >= today_start
+        )
+
+    db.count_applied_today = _count_applied_today
     return db
 
 

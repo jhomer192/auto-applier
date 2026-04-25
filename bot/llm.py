@@ -124,14 +124,14 @@ async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
     Raises:
         LLMError: If all retry attempts fail or a permanent error occurs.
     """
-    _TRANSIENT_EXIT_CODES = {1}  # claude CLI uses exit 1 for overload/timeout
     _MAX_ATTEMPTS = 3
     _BACKOFF = [2, 4, 8]  # seconds between retries
 
     def _run() -> str:
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt],
+                ["claude", "-p", "--max-tokens", str(max_tokens), "-"],
+                input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=120,

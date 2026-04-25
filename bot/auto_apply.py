@@ -256,7 +256,6 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                 pass
             # This job and all remaining stay pending in DB; nothing to extend
             break
-            break
 
         # ----- Step 8: Submit -----
         resume_path = profile.get("resume_path", "")

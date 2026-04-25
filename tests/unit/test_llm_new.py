@@ -52,7 +52,7 @@ def test_tailor_resume_prompt_contains_grounding_constraint(valid_profile):
     captured = []
 
     def fake_run(args, **kwargs):
-        captured.append(args[-1])
+        captured.append(kwargs.get("input", ""))
         return mock_subprocess(stdout="resume text")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -68,7 +68,7 @@ def test_tailor_resume_prompt_contains_ats_keywords(valid_profile):
     captured = []
 
     def fake_run(args, **kwargs):
-        captured.append(args[-1])
+        captured.append(kwargs.get("input", ""))
         return mock_subprocess(stdout="resume")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -109,7 +109,7 @@ def test_extract_achievements_prompt_contains_grounding_constraint(valid_profile
     captured = []
 
     def fake_run(args, **kwargs):
-        captured.append(args[-1])
+        captured.append(kwargs.get("input", ""))
         return mock_subprocess(stdout="achievements: []")
 
     with patch("subprocess.run", side_effect=fake_run):
@@ -124,7 +124,7 @@ def test_extract_achievements_prompt_includes_interview_answers(valid_profile):
     captured = []
 
     def fake_run(args, **kwargs):
-        captured.append(args[-1])
+        captured.append(kwargs.get("input", ""))
         return mock_subprocess(stdout="achievements: []")
 
     with patch("subprocess.run", side_effect=fake_run):

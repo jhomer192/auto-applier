@@ -177,8 +177,13 @@ async def human_type(page, selector: str, text: str) -> None:
     Long text (> HUMAN_TYPE_MAX_CHARS): faster "paste-like" mode (~25ms/char)
       that still fires keyboard events (unlike page.fill which sets value directly).
 
-    Always clears the field first with triple-click.
+    Always clears the field first, then types. Empty/None text is a no-op —
+    callers that want to clear-without-typing should not call this function;
+    adapters skip fields with no answer before reaching human_type.
     """
+    if not text:
+        return
+
     # Click to focus
     await page.click(selector)
     await asyncio.sleep(random.uniform(0.12, 0.35))
@@ -188,9 +193,6 @@ async def human_type(page, selector: str, text: str) -> None:
     await asyncio.sleep(random.uniform(0.05, 0.12))
     await page.keyboard.press("Delete")
     await asyncio.sleep(random.uniform(0.05, 0.15))
-
-    if not text:
-        return  # empty string: clear only, no typing
 
     if len(text) <= HUMAN_TYPE_MAX_CHARS:
         # Full human-speed typing

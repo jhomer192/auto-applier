@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from bot.human import (
     field_transition_pause,
@@ -115,7 +116,7 @@ class LeverAdapter:
         _validate_resume(resume_path)
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
-        job_slug = url.rstrip("/").split("/")[-1]
+        job_slug = re.sub(r"[^A-Za-z0-9_-]", "_", url.rstrip("/").split("/")[-1])[:64]
 
         async with async_playwright() as p:
             browser, ctx = await launch_stealth_context(p)
@@ -195,6 +196,8 @@ class LeverAdapter:
                             is_checked = await page.is_checked(field.selector)
                             if should_check and not is_checked:
                                 await page.check(field.selector)
+                            elif not should_check and is_checked:
+                                await page.uncheck(field.selector)
                             submitted[field.label] = field.answer
                             await field_transition_pause()
                     except Exception as fill_err:

@@ -52,7 +52,7 @@ def test_generate_field_answer_passes_constraint(valid_profile):
     captured_prompt = []
 
     def fake_run(args, **kwargs):
-        captured_prompt.append(args[-1])  # last arg is the prompt
+        captured_prompt.append(kwargs.get("input", ""))  # prompt is now via stdin
         return mock_subprocess(stdout="5 years")
 
     with patch("subprocess.run", side_effect=fake_run):

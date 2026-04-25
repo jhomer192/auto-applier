@@ -1,6 +1,9 @@
 import aiosqlite
+import logging
 from pathlib import Path
 from bot.models import ApplicationRecord, EmailThread, QueuedJob, SavedSearch
+
+logger = logging.getLogger(__name__)
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS applications (
@@ -100,7 +103,7 @@ class ApplicationDB:
                 try:
                     await db.execute(f"ALTER TABLE applications ADD COLUMN {col} {defn}")
                 except Exception:
-                    pass  # column already exists
+                    logger.debug("Migration: column %r already present, skipping", col)
             await db.commit()
 
     async def insert_application(self, app: ApplicationRecord) -> int:
@@ -133,6 +136,16 @@ class ApplicationDB:
             )
             rows = await cursor.fetchall()
             return [_row_to_record(row) for row in rows]
+
+    async def count_applied_today(self, today_start: str) -> int:
+        """Return the number of 'applied' records since today_start (ISO datetime string)."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM applications WHERE status='applied' AND applied_at >= ?",
+                (today_start,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
 
     async def get_by_id(self, app_id: int) -> ApplicationRecord | None:
         async with aiosqlite.connect(self._path) as db:
@@ -245,6 +258,34 @@ class ApplicationDB:
                 (url,),
             )
             return await cursor.fetchone() is not None
+
+    async def insert_if_not_applied(self, app: "ApplicationRecord") -> tuple[bool, int]:
+        """Atomically check for a prior 'applied' record and insert if none exists.
+
+        Returns (inserted, row_id). inserted=False means a duplicate was found and
+        nothing was written. Uses a single connection + BEGIN IMMEDIATE to eliminate
+        the TOCTOU race between is_already_applied() and insert_application().
+        """
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT 1 FROM applications WHERE url=? AND status='applied' LIMIT 1",
+                (app.url,),
+            )
+            if await cursor.fetchone() is not None:
+                await db.execute("ROLLBACK")
+                return False, -1
+            cursor = await db.execute(
+                """INSERT INTO applications
+                   (url, title, company, site, status, submitted_fields,
+                    screenshot_path, applied_at, notes, cover_letter, tailored_resume, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (app.url, app.title, app.company, app.site, app.status,
+                 app.submitted_fields, app.screenshot_path, app.applied_at,
+                 app.notes, app.cover_letter, app.tailored_resume, app.created_at),
+            )
+            await db.commit()
+            return True, cursor.lastrowid
 
     async def is_job_seen(self, url: str) -> bool:
         async with aiosqlite.connect(self._path) as db:

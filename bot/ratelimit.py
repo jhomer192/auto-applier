@@ -43,13 +43,7 @@ async def enforce_rate_limit(
     # --- Daily cap (skip if 0) ---
     if daily_cap > 0:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        recent = await db.get_recent(limit=daily_cap + 20)
-        applied_today = sum(
-            1 for r in recent
-            if r.status == "applied"
-            and r.applied_at
-            and r.applied_at >= today_start
-        )
+        applied_today = await db.count_applied_today(today_start)
         if applied_today >= daily_cap:
             raise RateLimitExceeded(
                 f"Daily cap of {daily_cap} applications reached. Will resume tomorrow."

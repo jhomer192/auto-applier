@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from bot.human import (
     after_click_pause,
@@ -88,7 +89,7 @@ class GreenhouseAdapter:
         _validate_resume(resume_path)
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
-        job_slug = url.rstrip("/").split("/")[-1]
+        job_slug = re.sub(r"[^A-Za-z0-9_-]", "_", url.rstrip("/").split("/")[-1])[:64]
 
         async with async_playwright() as p:
             browser, ctx = await launch_stealth_context(p)
