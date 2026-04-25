@@ -21,7 +21,7 @@ for input where marked **→ ASK**.
 
 ---
 
-## Step 0 — Verify Claude Code CLI is installed
+## Step 0 — Verify Claude Code CLI is installed and authenticated
 
 Run: `claude --version`
 
@@ -30,6 +30,26 @@ If the command is not found, tell the user:
 > and make sure `claude` is on your PATH, then come back."
 
 Stop here until this is confirmed.
+
+**→ ASK**: "Do you have an Anthropic API key? (You can get one at https://console.anthropic.com/ — it requires a paid account.)"
+
+Once they have their key, run:
+```bash
+claude config set apiKey <their_key>
+```
+
+Or ask them to set it in their shell and in `.env`:
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Then verify the CLI works end-to-end:
+```bash
+echo "Reply with just the word: hello" | claude -p -
+```
+
+If this prints `hello` (or similar), the CLI is working. If it errors, the API key is wrong or not set.
+Stop here until this succeeds — every AI feature in the bot depends on it.
 
 ## Step 1 — Check Python
 

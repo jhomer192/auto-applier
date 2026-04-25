@@ -108,6 +108,7 @@ def main() -> None:
         screenshot_dir=screenshot_dir,
         gmail_inbox=gmail_inbox,
         profile_path=profile_path,
+        linkedin_auth=linkedin_auth,
     )
 
     async def _post_init(application) -> None:

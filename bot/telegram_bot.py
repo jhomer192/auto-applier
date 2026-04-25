@@ -68,6 +68,7 @@ class AutoApplierBot:
         screenshot_dir: str = "data/screenshots",
         gmail_inbox: GmailInbox | None = None,
         profile_path: str = "profile.yaml",
+        linkedin_auth: str = "data/linkedin_auth.json",
     ) -> None:
         self._token = token
         self._chat_id = chat_id
@@ -77,6 +78,7 @@ class AutoApplierBot:
         self._screenshot_dir = screenshot_dir
         self._gmail_inbox = gmail_inbox
         self._profile_path = profile_path
+        self._linkedin_auth = linkedin_auth
 
     def build_app(self, post_init=None) -> Application:
         builder = Application.builder().token(self._token)
@@ -92,6 +94,7 @@ class AutoApplierBot:
         app.bot_data["screenshot_dir"] = self._screenshot_dir
         app.bot_data["gmail_inbox"] = self._gmail_inbox
         app.bot_data["profile_path"] = self._profile_path
+        app.bot_data["linkedin_auth"] = self._linkedin_auth
 
         app.add_handler(CommandHandler("start", cmd_help))
         app.add_handler(CommandHandler("help", cmd_help))
@@ -1558,7 +1561,7 @@ async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "(This takes ~20 seconds)"
     )
 
-    auth_state = "data/linkedin_auth.json"
+    auth_state = context.bot_data.get("linkedin_auth", "data/linkedin_auth.json")
 
     try:
         from bot.linkedin_audit import run_linkedin_audit, format_audit_report
