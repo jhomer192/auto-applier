@@ -60,6 +60,12 @@ mkdir -p data/screenshots
 
 Confirm all commands exit 0 before continuing.
 
+Then run a quick sanity check:
+```bash
+.venv/bin/pytest --tb=short -q
+```
+If tests pass, your environment is healthy.
+
 ## Step 4 — Build the profile
 
 Tell the user: *"I'm going to ask you a few questions to set up your profile. Your answers
@@ -70,9 +76,12 @@ Then run:
 .venv/bin/python setup/collect_profile.py
 ```
 
-Wait for the script to finish. At the end it will ask whether to set up Gmail inbox
-(optional — lets the bot notify you of recruiter replies). The script handles this
-automatically; just answer the prompts. Confirm `profile.yaml` was created.
+Wait for the script to finish. The script will finish by asking whether to set up the **Gmail inbox** feature (optional).
+This enables Telegram notifications when recruiters reply to your applications, and lets you
+respond directly from Telegram. If you skip it now, you can enable it later by adding
+`GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` to `.env` and restarting the service.
+
+Confirm `profile.yaml` was created.
 
 ## Step 5 — Telegram bot
 
@@ -164,6 +173,8 @@ The bot is always running in the background. Send a job URL to Telegram to apply
 polls your inbox every 5 minutes. When a recruiter emails you, you get a Telegram
 notification with a preview. Type your reply directly in Telegram and the bot sends it
 via Gmail (as a proper reply thread). Use `/cancel` to dismiss without replying.
+`/cancel` dismisses only the *current* pending item — one email at a time if multiple
+recruiter emails arrived, or the current job application if one is in progress.
 
 To enable Gmail later without re-running full setup:
 1. Generate an App Password at https://myaccount.google.com/apppasswords

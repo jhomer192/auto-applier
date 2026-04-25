@@ -55,6 +55,9 @@ class JobPreferences:
     work_arrangement: list[str] = field(default_factory=list)  # "remote"|"hybrid"|"onsite"
     excluded_companies: list[str] = field(default_factory=list)
     auto_apply_threshold: int = 0  # match_score >= this + all fit checks pass → apply without Y/N (0 = disabled)
+    min_apply_gap_minutes: int = 4  # minimum minutes between application submissions
+    max_apply_gap_minutes: int = 8  # upper bound for randomised gap
+    max_applies_per_day: int = 30   # daily application cap (0 = no cap)
 
 
 @dataclass

@@ -92,3 +92,36 @@ def test_rejection_beats_interview_signals():
         "Unfortunately, we will not be moving forward with your application.",
     )
     assert classify_email(email) == "rejection"
+
+
+# ── edge cases ────────────────────────────────────────────────────────────────
+
+def test_classify_empty_email():
+    assert classify_email(_make("", "")) == "other"
+
+
+def test_classify_offer_body_only():
+    email = _make("Following up", "We are pleased to offer you the position")
+    assert classify_email(email) == "offer"
+
+
+def test_classify_interview_body_only():
+    email = _make("Following up", "please share your availability for a phone screen")
+    assert classify_email(email) == "interview"
+
+
+def test_classify_unicode_no_crash():
+    result = classify_email(_make(
+        "Félicitations — entretien prévu",
+        "Nous sommes heureux de vous inviter",
+    ))
+    assert isinstance(result, str)
+
+
+def test_rejection_beats_offer_and_interview():
+    email = _make(
+        "Update on your application",
+        "Unfortunately we cannot proceed. We'd like to offer you the position but we "
+        "will not be moving forward. Please share your availability anyway.",
+    )
+    assert classify_email(email) == "rejection"

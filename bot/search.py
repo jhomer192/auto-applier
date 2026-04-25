@@ -1,11 +1,12 @@
 """Job search scrapers.
 
 Polls LinkedIn job search results using an authenticated Playwright session.
-Returns a list of (title, company, url) tuples for unseen jobs matching the query.
+Uses human.py helpers for realistic timing and browser fingerprinting.
 """
 import logging
 import urllib.parse
 
+from bot.human import human_scroll, jitter_pause, launch_stealth_context, page_load_pause
 from bot.models import SavedSearch, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,6 @@ async def search_linkedin(
     """
     try:
         from playwright.async_api import async_playwright
-        from playwright_stealth import stealth_async
     except ImportError as e:
         logger.error("Playwright not installed: %s", e)
         return []
@@ -46,21 +46,23 @@ async def search_linkedin(
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
             try:
-                ctx = await browser.new_context(storage_state=auth_state_path)
+                browser, ctx = await launch_stealth_context(p, auth_state=auth_state_path)
             except Exception:
-                # Auth state missing or invalid — skip gracefully
                 logger.warning("LinkedIn auth state not found at %s — skipping search", auth_state_path)
-                await browser.close()
                 return []
 
             page = await ctx.new_page()
-            await stealth_async(page)
 
             try:
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(2000)
+                await page_load_pause()
+
+                # Scroll to load lazy-loaded job cards
+                await human_scroll(page, pixels=400)
+                await jitter_pause(1200)
+                await human_scroll(page, pixels=300)
+                await jitter_pause(800)
 
                 # Job cards on the search results page
                 cards = await page.query_selector_all("a.job-card-list__title, a.job-card-container__link")
@@ -75,7 +77,11 @@ async def search_linkedin(
                         if "/jobs/view/" not in href:
                             continue
                         # Normalise — strip query params
-                        url = "https://www.linkedin.com" + href.split("?")[0] if href.startswith("/") else href.split("?")[0]
+                        url = (
+                            "https://www.linkedin.com" + href.split("?")[0]
+                            if href.startswith("/")
+                            else href.split("?")[0]
+                        )
                         if url in seen_urls:
                             continue
                         seen_urls.add(url)

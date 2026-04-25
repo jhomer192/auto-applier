@@ -1,6 +1,17 @@
 import logging
 import os
 
+from bot.human import (
+    after_click_pause,
+    field_transition_pause,
+    human_click,
+    human_scroll,
+    human_type,
+    jitter_pause,
+    launch_stealth_context,
+    page_load_pause,
+    read_pause,
+)
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
 from playwright.async_api import async_playwright
@@ -19,31 +30,36 @@ class GreenhouseAdapter:
 
     async def fetch_job_info(self, url: str) -> JobInfo:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, wait_until="networkidle")
-
-            title = await page.title()
+            browser, ctx = await launch_stealth_context(p)
+            page = await ctx.new_page()
             try:
-                company = await page.text_content(".company-name") or ""
-                company = company.strip()
-            except Exception:
-                company = title.split(" at ")[-1] if " at " in title else ""
+                await page.goto(url, wait_until="networkidle")
+                await page_load_pause()
+                await human_scroll(page)
+                await read_pause(350)
 
-            html = await page.content()
-            await browser.close()
-            return JobInfo(title=title.strip(), company=company.strip(), url=url, raw_html=html)
+                title = await page.title()
+                try:
+                    company = (await page.text_content(".company-name") or "").strip()
+                except Exception:
+                    company = title.split(" at ")[-1] if " at " in title else ""
+
+                html = await page.content()
+                return JobInfo(title=title.strip(), company=company.strip(), url=url, raw_html=html)
+            finally:
+                await browser.close()
 
     async def extract_fields(self, url: str) -> list[FormField]:
         """Dynamically scrape all fields from the Greenhouse application form."""
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+            browser, ctx = await launch_stealth_context(p)
+            page = await ctx.new_page()
             try:
-                # Greenhouse application pages are at /application suffix
                 app_url = url if "/application" in url else url.rstrip("/") + "/application"
                 await page.goto(app_url, wait_until="networkidle")
-                await page.wait_for_timeout(1000)
+                await page_load_pause()
+                await human_scroll(page)
+                await jitter_pause(800)
 
                 fields = await extract_fields_from_page(page)
                 logger.info("Greenhouse: scraped %d fields from %s", len(fields), app_url)
@@ -66,13 +82,15 @@ class GreenhouseAdapter:
         job_slug = url.rstrip("/").split("/")[-1]
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+            browser, ctx = await launch_stealth_context(p)
+            page = await ctx.new_page()
 
             try:
                 app_url = url if "/application" in url else url.rstrip("/") + "/application"
                 await page.goto(app_url, wait_until="networkidle")
-                await page.wait_for_timeout(500)
+                await page_load_pause()
+                await human_scroll(page)
+                await jitter_pause(600)
 
                 for field in fields:
                     if not field.answer:
@@ -81,12 +99,15 @@ class GreenhouseAdapter:
                         if field.field_type == "file":
                             await page.set_input_files(field.selector, resume_path)
                             submitted[field.label] = resume_path
+                            await field_transition_pause()
                         elif field.field_type in ("text", "textarea"):
-                            await page.fill(field.selector, field.answer)
+                            await human_type(page, field.selector, field.answer)
                             submitted[field.label] = field.answer
+                            await field_transition_pause()
                         elif field.field_type == "select":
                             await page.select_option(field.selector, label=field.answer)
                             submitted[field.label] = field.answer
+                            await field_transition_pause()
                         elif field.field_type == "checkbox":
                             should_check = field.answer.lower() in ("yes", "true", "1", "checked")
                             is_checked = await page.is_checked(field.selector)
@@ -95,15 +116,21 @@ class GreenhouseAdapter:
                             elif not should_check and is_checked:
                                 await page.uncheck(field.selector)
                             submitted[field.label] = field.answer
+                            await field_transition_pause()
                     except Exception as fill_err:
                         logger.warning("Greenhouse: could not fill %r (%s): %s", field.label, field.selector, fill_err)
+
+                # Scroll down to the submit button so it's in viewport
+                await human_scroll(page, pixels=300)
+                await jitter_pause(500)
 
                 os.makedirs("data/screenshots", exist_ok=True)
                 screenshot_path = f"data/screenshots/greenhouse_{job_slug}_pre.png"
                 await page.screenshot(path=screenshot_path)
 
-                await page.click("button[type='submit'], input[type='submit']")
+                await human_click(page, "button[type='submit'], input[type='submit']")
                 await page.wait_for_load_state("networkidle", timeout=15000)
+                await jitter_pause(800)
 
                 screenshot_path = f"data/screenshots/greenhouse_{job_slug}_post.png"
                 await page.screenshot(path=screenshot_path)
@@ -134,7 +161,6 @@ class GreenhouseAdapter:
 
 
 def _static_fallback() -> list[FormField]:
-    """Minimal static field list used if dynamic scraping fails."""
     return [
         FormField(label="First Name", field_type="text", required=True, selector="#first_name"),
         FormField(label="Last Name", field_type="text", required=True, selector="#last_name"),

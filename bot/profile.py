@@ -77,6 +77,9 @@ def load_preferences(profile: dict) -> JobPreferences:
         work_arrangement=_strlist("work_arrangement"),
         excluded_companies=[str(c).strip() for c in (raw.get("excluded_companies") or []) if c],
         auto_apply_threshold=_int("auto_apply_threshold"),
+        min_apply_gap_minutes=_int("min_apply_gap_minutes") or 4,
+        max_apply_gap_minutes=_int("max_apply_gap_minutes") or 8,
+        max_applies_per_day=_int("max_applies_per_day") or 30,
     )
 
 
@@ -96,6 +99,9 @@ def save_preferences(profile: dict, prefs: JobPreferences, path: str) -> None:
         "work_arrangement": prefs.work_arrangement,
         "excluded_companies": prefs.excluded_companies,
         "auto_apply_threshold": prefs.auto_apply_threshold,
+        "min_apply_gap_minutes": prefs.min_apply_gap_minutes,
+        "max_apply_gap_minutes": prefs.max_apply_gap_minutes,
+        "max_applies_per_day": prefs.max_applies_per_day,
     }
     with open(path, "w") as f:
         yaml.dump(profile, f, default_flow_style=False, allow_unicode=True)

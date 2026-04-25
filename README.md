@@ -278,6 +278,12 @@ journalctl -u auto-applier -f
 
 This shows live log output. Look for any error messages in red. Press `Ctrl+C` to stop watching logs.
 
+**I used /cancel and my recruiter email notifications stopped**
+`/cancel` dismisses the current pending email (one at a time). The bot polls for new
+emails every 5 minutes — if more are waiting, you'll be prompted for the next one.
+Rejections and application confirmations are silently filtered; only interview requests
+and job offers trigger a notification.
+
 **I want to update my profile (new job title, new skills, etc.)**
 SSH into your server, go to the project folder, edit `profile.yaml` with your changes, then restart the service:
 
@@ -295,6 +301,8 @@ sudo systemctl restart auto-applier
 ---
 
 ## You're done
+
+**Verify the install:** `.venv/bin/pytest --tb=short -q` — all tests should pass.
 
 Once setup is complete, you never need to touch the server again unless something breaks. The bot runs 24/7, you send it job URLs from your phone, and it handles the rest.
 

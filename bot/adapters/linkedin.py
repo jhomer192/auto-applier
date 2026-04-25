@@ -1,9 +1,20 @@
 import logging
 import os
 
+from bot.human import (
+    after_click_pause,
+    field_transition_pause,
+    human_click,
+    human_scroll,
+    human_type,
+    jitter_pause,
+    launch_stealth_context,
+    page_load_pause,
+    read_pause,
+)
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
-from playwright.async_api import async_playwright, Browser, BrowserContext
+from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -20,35 +31,29 @@ class LinkedInAdapter:
     def __init__(self, auth_state_path: str = "data/linkedin_auth.json") -> None:
         self._auth_state = auth_state_path
 
-    async def _get_context(self, playwright) -> tuple[Browser, BrowserContext]:
-        browser = await playwright.chromium.launch(headless=True)
-        ctx = await browser.new_context(storage_state=self._auth_state)
-        return browser, ctx
-
     async def fetch_job_info(self, url: str) -> JobInfo:
-        from playwright_stealth import stealth_async
-
         async with async_playwright() as p:
-            browser, ctx = await self._get_context(p)
+            browser, ctx = await launch_stealth_context(p, self._auth_state)
             page = await ctx.new_page()
             try:
-                await stealth_async(page)
                 await page.goto(url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+                await page_load_pause()
+
+                # Scroll a bit to look like we're reading the job description
+                await human_scroll(page)
+                await read_pause(400)
 
                 try:
                     title = (
                         await page.text_content("h1.job-details-jobs-unified-top-card__job-title") or ""
-                    )
-                    title = title.strip()
+                    ).strip()
                 except Exception:
                     title = await page.title()
 
                 try:
                     company = (
                         await page.text_content(".job-details-jobs-unified-top-card__company-name") or ""
-                    )
-                    company = company.strip()
+                    ).strip()
                 except Exception:
                     company = ""
 
@@ -64,15 +69,14 @@ class LinkedInAdapter:
         fields from each, then close without submitting. Returns the complete
         ordered field list across all steps.
         """
-        from playwright_stealth import stealth_async
-
         async with async_playwright() as p:
-            browser, ctx = await self._get_context(p)
+            browser, ctx = await launch_stealth_context(p, self._auth_state)
             page = await ctx.new_page()
             try:
-                await stealth_async(page)
                 await page.goto(url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+                await page_load_pause()
+                await human_scroll(page)
+                await jitter_pause(800)
 
                 # Open Easy Apply modal
                 apply_btn = page.locator("button.jobs-apply-button")
@@ -80,15 +84,14 @@ class LinkedInAdapter:
                     logger.warning("LinkedIn: Easy Apply button not found, using static fallback")
                     return _static_fallback()
 
-                await apply_btn.first.click()
-                await page.wait_for_timeout(1500)
+                await human_click(page, "button.jobs-apply-button")
+                await jitter_pause(1500)
 
                 all_fields: list[FormField] = []
                 seen_labels: set[str] = set()
                 max_steps = 15
 
                 for step in range(max_steps):
-                    # Scrape visible fields on this step
                     step_fields = await extract_fields_from_page(page)
                     for f in step_fields:
                         key = f"{f.label}|{f.field_type}"
@@ -109,8 +112,8 @@ class LinkedInAdapter:
                         "button[aria-label*='Continue'], button:has-text('Next')"
                     )
                     if await next_btn.count() > 0:
-                        await next_btn.first.click()
-                        await page.wait_for_timeout(1000)
+                        await human_click(page, "button[aria-label*='Continue'], button:has-text('Next')")
+                        await jitter_pause(1200)
                     else:
                         logger.warning("LinkedIn: no Next or Submit found at step %d", step + 1)
                         break
@@ -140,7 +143,6 @@ class LinkedInAdapter:
     ) -> ApplicationResult:
         """Step through the Easy Apply modal, filling fields at each step."""
         _validate_resume(resume_path)
-        from playwright_stealth import stealth_async
 
         submitted: dict[str, str] = {}
         screenshot_path: str | None = None
@@ -148,25 +150,23 @@ class LinkedInAdapter:
         job_id = url.rstrip("/").split("/")[-1]
 
         async with async_playwright() as p:
-            browser, ctx = await self._get_context(p)
+            browser, ctx = await launch_stealth_context(p, self._auth_state)
             page = await ctx.new_page()
 
             try:
-                await stealth_async(page)
                 await page.goto(url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+                await page_load_pause()
+                await human_scroll(page)
+                await jitter_pause(800)
 
-                await page.click("button.jobs-apply-button", timeout=10000)
-                await page.wait_for_timeout(1500)
+                await human_click(page, "button.jobs-apply-button")
+                await jitter_pause(1500)
 
                 os.makedirs("data/screenshots", exist_ok=True)
-
-                # Build label → field lookup for fast matching
                 field_by_label = {f.label.lower(): f for f in fields}
-
                 max_steps = 15
+
                 for _step in range(max_steps):
-                    # Fill all visible fields on this step
                     step_fields = await extract_fields_from_page(page)
                     for visible_field in step_fields:
                         match = field_by_label.get(visible_field.label.lower())
@@ -179,22 +179,26 @@ class LinkedInAdapter:
                                 if await file_input.count() > 0 and visible_field.label not in submitted:
                                     await file_input.set_input_files(resume_path)
                                     submitted[visible_field.label] = resume_path
+                                    await field_transition_pause()
                             elif visible_field.field_type in ("text", "textarea"):
-                                await page.fill(visible_field.selector, answer)
+                                await human_type(page, visible_field.selector, answer)
                                 submitted[visible_field.label] = answer
+                                await field_transition_pause()
                             elif visible_field.field_type == "select":
                                 await page.select_option(visible_field.selector, label=answer)
                                 submitted[visible_field.label] = answer
+                                await field_transition_pause()
                             elif visible_field.field_type == "checkbox":
                                 should_check = answer.lower() in ("yes", "true", "1")
                                 is_checked = await page.is_checked(visible_field.selector)
                                 if should_check and not is_checked:
                                     await page.check(visible_field.selector)
                                 submitted[visible_field.label] = answer
+                                await field_transition_pause()
                         except Exception as fill_err:
                             logger.warning("LinkedIn: could not fill %r: %s", visible_field.label, fill_err)
 
-                    await page.wait_for_timeout(300)
+                    await jitter_pause(500)
 
                     # Check for Submit button
                     submit_btn = page.locator(
@@ -203,8 +207,8 @@ class LinkedInAdapter:
                     if await submit_btn.count() > 0:
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_pre.png"
                         await page.screenshot(path=screenshot_path)
-                        await submit_btn.first.click()
-                        await page.wait_for_timeout(3000)
+                        await human_click(page, "button[aria-label*='Submit'], button:has-text('Submit application')")
+                        await jitter_pause(3000)
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_post.png"
                         await page.screenshot(path=screenshot_path)
                         submitted_flag = True
@@ -215,8 +219,8 @@ class LinkedInAdapter:
                         "button[aria-label*='Continue'], button:has-text('Next')"
                     )
                     if await next_btn.count() > 0:
-                        await next_btn.first.click()
-                        await page.wait_for_timeout(1000)
+                        await human_click(page, "button[aria-label*='Continue'], button:has-text('Next')")
+                        await jitter_pause(1200)
                     else:
                         break
 

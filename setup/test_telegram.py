@@ -18,9 +18,15 @@ async def main() -> None:
         sys.exit(1)
 
     try:
+        chat_id_int = int(chat_id)
+    except ValueError:
+        print("ERROR: TELEGRAM_CHAT_ID must be a plain integer (e.g. 123456789). Check your .env.")
+        sys.exit(1)
+
+    try:
         bot = Bot(token=token)
         await bot.send_message(
-            chat_id=int(chat_id),
+            chat_id=chat_id_int,
             text=(
                 "Setup complete! Your auto job applier is ready.\n\n"
                 "Send a job URL to apply:\n"

@@ -44,3 +44,32 @@ Run these before declaring the auto-applier production-ready.
 - [ ] Send an unsupported URL (e.g. workday.com) -> "Unsupported site" message
 - [ ] Kill the bot process -> systemd restarts it within 10 seconds
 - [ ] Check logs: `journalctl -u auto-applier -f`
+
+## Gmail Inbox Flow
+
+Prerequisites: `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` set in `.env`, bot restarted.
+
+### Inbound notification
+- [ ] Send a test email to the configured Gmail address with subject "Interview Invitation — Test Role"
+- [ ] Within 5 minutes, Telegram bot sends a notification with the from address, subject, and preview
+- [ ] Notification shows the availability prompt (not a plain "you got mail" message)
+
+### Reply flow
+- [ ] Type availability (e.g. "Tuesday 2-4pm or Thursday any time") in Telegram
+- [ ] Bot replies "Composing reply..." then echoes the composed email body
+- [ ] Check sent Gmail — email appears in Sent with correct In-Reply-To header (opens in same thread as original)
+
+### /cancel dismisses one email
+- [ ] Send two interview emails to Gmail
+- [ ] Wait for both notifications to arrive
+- [ ] Send /cancel — bot dismisses first, immediately prompts for second
+- [ ] Send /cancel again — bot replies "Dismissed." and queue is empty
+
+### Filtering
+- [ ] Send email with subject "Thank you for applying" — no Telegram notification (confirmation filtered)
+- [ ] Send email with body "Unfortunately we will not be moving forward" — no Telegram notification (rejection filtered)
+- [ ] Send email with subject "We'd like to extend a job offer" — notification arrives with 🎉 header and offer prompt
+
+### Offer flow
+- [ ] Reply "accept" to an offer notification — Claude composes acceptance email, bot sends and echoes it
+- [ ] Reply "counter at $120k, start March 1" to an offer — Claude composes counter-offer email professionally
