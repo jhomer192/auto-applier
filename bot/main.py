@@ -17,8 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-INBOX_POLL_INTERVAL = 300   # seconds (5 minutes)
-SEARCH_POLL_INTERVAL = 1800  # seconds (30 minutes)
+INBOX_POLL_INTERVAL = int(os.getenv("INBOX_POLL_INTERVAL", "300"))    # seconds (5 minutes)
+SEARCH_POLL_INTERVAL = int(os.getenv("SEARCH_POLL_INTERVAL", "1800"))  # seconds (30 minutes)
 
 
 async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:

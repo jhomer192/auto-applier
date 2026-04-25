@@ -197,6 +197,33 @@ def _collect_preferences() -> dict:
         except ValueError:
             print("  Skipping — invalid number.")
 
+    # Rate limiting
+    print("")
+    print("Rate limiting: controls how quickly the bot applies to jobs.")
+    print("A random pause between min and max is added between applications to look natural.")
+    min_gap_raw = ask("Minimum minutes between applications (default 4)")
+    if min_gap_raw:
+        try:
+            prefs["min_apply_gap_minutes"] = max(1, int(min_gap_raw))
+        except ValueError:
+            print("  Skipping — invalid number.")
+
+    max_gap_raw = ask("Maximum minutes between applications (default 8)")
+    if max_gap_raw:
+        try:
+            prefs["max_apply_gap_minutes"] = max(
+                prefs.get("min_apply_gap_minutes", 4), int(max_gap_raw)
+            )
+        except ValueError:
+            print("  Skipping — invalid number.")
+
+    max_day_raw = ask("Maximum applications per day, 0 = no cap (default 30)")
+    if max_day_raw:
+        try:
+            prefs["max_applies_per_day"] = max(0, int(max_day_raw))
+        except ValueError:
+            print("  Skipping — invalid number.")
+
     return prefs
 
 
