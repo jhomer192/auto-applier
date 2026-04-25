@@ -43,6 +43,11 @@ class ApplicationResult:
     screenshot_path: str | None
     submitted_fields: dict[str, str]
     error: str | None
+    # Verification metadata
+    submission_confirmed: bool = False   # True only when page gave a positive confirmation signal
+    missing_fields: list = field(default_factory=list)  # required fields we had answers for but couldn't fill
+    closed: bool = False                 # True if job was detected as no longer accepting applications
+    already_applied: bool = False        # True if job was detected as already applied to
 
 
 @dataclass

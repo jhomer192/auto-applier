@@ -14,6 +14,15 @@ from bot.human import (
 )
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
+from bot.verify import (
+    classify_missing,
+    detect_already_applied,
+    detect_captcha,
+    detect_job_closed,
+    detect_submission_result,
+    missing_required_fields,
+    scan_form_errors,
+)
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -38,8 +47,6 @@ class LinkedInAdapter:
             try:
                 await page.goto(url, wait_until="domcontentloaded")
                 await page_load_pause()
-
-                # Scroll a bit to look like we're reading the job description
                 await human_scroll(page)
                 await read_pause(400)
 
@@ -159,6 +166,30 @@ class LinkedInAdapter:
                 await human_scroll(page)
                 await jitter_pause(800)
 
+                # ── Stage 1: pre-fill checks ──────────────────────────────────────
+                closed, reason = await detect_job_closed(page)
+                if closed:
+                    logger.info("LinkedIn: job closed (%s) — aborting", reason)
+                    return ApplicationResult(
+                        success=False, screenshot_path=None, submitted_fields={},
+                        error=f"Job is no longer accepting applications: {reason}",
+                        closed=True,
+                    )
+
+                if await detect_already_applied(page):
+                    logger.info("LinkedIn: already applied — aborting")
+                    return ApplicationResult(
+                        success=False, screenshot_path=None, submitted_fields={},
+                        error="Already applied to this job.",
+                        already_applied=True,
+                    )
+
+                if await detect_captcha(page):
+                    return ApplicationResult(
+                        success=False, screenshot_path=None, submitted_fields={},
+                        error="Bot challenge (CAPTCHA) detected — cannot proceed automatically.",
+                    )
+
                 await human_click(page, "button.jobs-apply-button")
                 await jitter_pause(1500)
 
@@ -200,15 +231,45 @@ class LinkedInAdapter:
 
                     await jitter_pause(500)
 
+                    # Check for form errors before advancing
+                    step_errors = await scan_form_errors(page)
+                    if step_errors:
+                        logger.warning("LinkedIn: form errors at step %d: %s", _step, step_errors)
+
                     # Check for Submit button
                     submit_btn = page.locator(
                         "button[aria-label*='Submit'], button:has-text('Submit application')"
                     )
                     if await submit_btn.count() > 0:
+                        # ── Stage 2: pre-submit verification ─────────────────────
+                        missing = missing_required_fields(fields, submitted)
+                        if missing:
+                            blocking, _ = classify_missing(missing)
+                            if blocking:
+                                logger.error(
+                                    "LinkedIn: blocking fields not filled — aborting: %s", blocking
+                                )
+                                # Dismiss modal before returning
+                                try:
+                                    await page.locator("button[aria-label='Dismiss']").first.click()
+                                except Exception:
+                                    pass
+                                return ApplicationResult(
+                                    success=False, screenshot_path=None, submitted_fields=submitted,
+                                    error=(
+                                        f"Aborted: critical fields could not be filled: "
+                                        f"{', '.join(blocking)}. Nothing was submitted."
+                                    ),
+                                    missing_fields=missing,
+                                )
+                            logger.warning("LinkedIn: non-blocking fields missing: %s", missing)
+
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_pre.png"
                         await page.screenshot(path=screenshot_path)
+
                         await human_click(page, "button[aria-label*='Submit'], button:has-text('Submit application')")
                         await jitter_pause(3000)
+
                         screenshot_path = f"data/screenshots/linkedin_{job_id}_post.png"
                         await page.screenshot(path=screenshot_path)
                         submitted_flag = True
@@ -232,11 +293,26 @@ class LinkedInAdapter:
                         error="Submit button was never reached after stepping through the Easy Apply modal.",
                     )
 
+                # ── Stage 3: post-submit verification ────────────────────────────
+                outcome, detail = await detect_submission_result(page)
+
+                if outcome == "error":
+                    logger.error("LinkedIn: submission rejected — %s", detail)
+                    return ApplicationResult(
+                        success=False, screenshot_path=screenshot_path,
+                        submitted_fields=submitted,
+                        error=f"Form rejected submission: {detail}",
+                        missing_fields=missing_required_fields(fields, submitted),
+                    )
+
+                if outcome != "success":
+                    logger.warning("LinkedIn: submission unconfirmed — review screenshot")
+
                 return ApplicationResult(
-                    success=True,
-                    screenshot_path=screenshot_path,
-                    submitted_fields=submitted,
-                    error=None,
+                    success=True, screenshot_path=screenshot_path,
+                    submitted_fields=submitted, error=None,
+                    submission_confirmed=(outcome == "success"),
+                    missing_fields=missing_required_fields(fields, submitted),
                 )
 
             except Exception as e:
@@ -248,10 +324,8 @@ class LinkedInAdapter:
                 except Exception:
                     pass
                 return ApplicationResult(
-                    success=False,
-                    screenshot_path=screenshot_path,
-                    submitted_fields=submitted,
-                    error=str(e),
+                    success=False, screenshot_path=screenshot_path,
+                    submitted_fields=submitted, error=str(e),
                 )
             finally:
                 await browser.close()

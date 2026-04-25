@@ -1200,6 +1200,14 @@ async def _submit_application(
     adapter = registry.get(pending.url)
     resume_path = profile.get("resume_path", "")
 
+    # Guard: don't double-submit the same job
+    if await db.is_already_applied(pending.url):
+        await update.message.reply_text(
+            "Already have a successful application on record for this job — skipping to avoid duplicate."
+        )
+        context.user_data.pop(PENDING_JOB, None)
+        return
+
     # Enforce rate limit before submitting
     prefs = load_preferences(profile)
 
@@ -1225,6 +1233,21 @@ async def _submit_application(
         result = await adapter.submit_application(pending.url, pending.fields, resume_path)
     except Exception as e:
         await update.message.reply_text(f"Application failed: {e}\nNothing was submitted.")
+        context.user_data.pop(PENDING_JOB, None)
+        return
+
+    # Special short-circuit: job closed or already applied (detected by adapter)
+    if result.closed:
+        await update.message.reply_text(
+            f"Job is no longer accepting applications — nothing submitted.\n{result.error}"
+        )
+        context.user_data.pop(PENDING_JOB, None)
+        return
+
+    if result.already_applied:
+        await update.message.reply_text(
+            "Already applied to this job (site confirmed) — nothing submitted."
+        )
         context.user_data.pop(PENDING_JOB, None)
         return
 
@@ -1257,6 +1280,12 @@ async def _submit_application(
             except Exception as photo_err:
                 logger.warning("Could not send screenshot %s: %s", result.screenshot_path, photo_err)
 
+        # Confirmation status
+        if result.submission_confirmed:
+            confirmation_line = "Submission confirmed by site."
+        else:
+            confirmation_line = "Submitted (unconfirmed — review screenshot to verify)."
+
         # Field summary (cap at 15 fields)
         field_lines = [f"  {k}: {v[:80]}" for k, v in list(result.submitted_fields.items())[:15]]
         extras = []
@@ -1265,10 +1294,21 @@ async def _submit_application(
         if record.cover_letter:
             extras.append(f"/coverletter {app_id}")
         extra_str = "\n\nRetrieve: " + " | ".join(extras) if extras else ""
-        await update.message.reply_text(
-            f"Application submitted! (ID: {app_id})\n\n"
+
+        msg = (
+            f"Application submitted! (ID: {app_id})\n"
+            f"{confirmation_line}\n\n"
             "Submitted:\n" + "\n".join(field_lines) + extra_str
         )
+
+        # Warn about any fields we couldn't verify were filled
+        if result.missing_fields:
+            msg += (
+                f"\n\nWarning: could not verify these fields were filled: "
+                f"{', '.join(result.missing_fields)}"
+            )
+
+        await update.message.reply_text(msg)
     else:
         await update.message.reply_text(
             f"Application failed: {result.error}\nNothing was submitted. (ID: {app_id})"

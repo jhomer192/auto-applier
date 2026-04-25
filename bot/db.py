@@ -219,6 +219,15 @@ class ApplicationDB:
             )
             await db.commit()
 
+    async def is_already_applied(self, url: str) -> bool:
+        """Return True if we have a successful application record for this URL."""
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM applications WHERE url=? AND status='applied' LIMIT 1",
+                (url,),
+            )
+            return await cursor.fetchone() is not None
+
     async def is_job_seen(self, url: str) -> bool:
         async with aiosqlite.connect(self._path) as db:
             cursor = await db.execute("SELECT 1 FROM seen_jobs WHERE url=?", (url,))
