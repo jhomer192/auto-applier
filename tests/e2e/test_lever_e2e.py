@@ -110,16 +110,31 @@ async def test_submit_records_all_filled_fields(http_server, adapter, resume_pdf
     assert "Email" in result.submitted_fields
 
 
-async def test_submit_skips_fields_with_no_answer(http_server, adapter, resume_pdf):
-    """Fields with empty answer should be skipped, not crash."""
+async def test_submit_aborts_when_required_field_has_no_answer(http_server, adapter, resume_pdf):
+    """Required blocking field with no answer should abort before touching the form."""
     url = f"{http_server}/lever_job.html"
     fields = [
         FormField(label="Full Name", field_type="text", required=True,
-                  selector="#name", answer=""),  # no answer
+                  selector="#name", answer=""),  # no answer generated
         FormField(label="Email", field_type="text", required=True,
                   selector="#email", answer="test@example.com"),
     ]
     result = await adapter.submit_application(url, fields, resume_pdf)
-    # Empty-answer field should not be in submitted_fields
-    assert "Full Name" not in result.submitted_fields
-    assert "Email" in result.submitted_fields
+    assert result.success is False
+    assert "Full Name" in result.missing_fields
+
+
+async def test_submit_skips_optional_fields_with_no_answer(http_server, adapter, resume_pdf):
+    """Optional fields with empty answer are skipped; form still submits."""
+    url = f"{http_server}/lever_job.html"
+    fields = [
+        FormField(label="Full Name", field_type="text", required=True,
+                  selector="#name", answer="Jane Smith"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="jane@example.com"),
+        FormField(label="Phone", field_type="text", required=False,
+                  selector="#phone", answer=""),  # optional, no answer
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert "Phone" not in result.submitted_fields
