@@ -17,9 +17,11 @@ from telegram.ext import (
 
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
+from bot.fit import evaluate_fit, fit_summary_lines
 from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
-from bot.models import ApplicationRecord, EmailThread, PendingJob, SavedSearch
+from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, SavedSearch
+from bot.profile import load_preferences, save_preferences
 from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("resume", cmd_resume))
         app.add_handler(CommandHandler("coverletter", cmd_coverletter))
         app.add_handler(CommandHandler("profile", cmd_profile))
+        app.add_handler(CommandHandler("prefs", cmd_prefs))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -131,7 +134,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/search list \u2014 list saved searches\n"
         "/search rm <id> \u2014 remove a search\n\n"
         "Profile commands:\n"
-        "/profile \u2014 add achievements to your profile\n\n"
+        "/profile \u2014 add achievements to your profile\n"
+        "/prefs \u2014 view/set job preferences (salary, roles, auto-apply)\n\n"
         "/help \u2014 this message"
     )
 
@@ -422,6 +426,164 @@ async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(header + record.cover_letter)
 
 
+async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """View and update job preferences.
+
+    /prefs                    — show current preferences
+    /prefs roles <r1,r2,...>  — set desired role types
+    /prefs salary <min> [target] — set salary floor and target (annual USD)
+    /prefs seniority <s1,s2,...> — set acceptable seniority levels
+    /prefs arrangement <r,h,o>   — set work arrangement preference
+    /prefs autoapply <0-100>     — set auto-apply threshold (0 = disabled)
+    /prefs exclude <company>     — add company to exclusion list
+    /prefs unexclude <company>   — remove from exclusion list
+    """
+    if not _auth(update, context):
+        return
+
+    profile: dict = context.bot_data["profile"]
+    profile_path: str = context.bot_data["profile_path"]
+    prefs = load_preferences(profile)
+    args = context.args or []
+
+    if not args:
+        # Show current preferences
+        roles = ", ".join(prefs.desired_roles) if prefs.desired_roles else "any"
+        min_s = f"${prefs.min_salary:,}" if prefs.min_salary else "not set"
+        target_s = f"${prefs.target_salary:,}" if prefs.target_salary else "not set"
+        seniority = ", ".join(prefs.seniority) if prefs.seniority else "any"
+        arrangement = ", ".join(prefs.work_arrangement) if prefs.work_arrangement else "any"
+        excluded = ", ".join(prefs.excluded_companies) if prefs.excluded_companies else "none"
+        auto = f"score >= {prefs.auto_apply_threshold}" if prefs.auto_apply_threshold else "off"
+        await update.message.reply_text(
+            "Current job preferences:\n\n"
+            f"Roles: {roles}\n"
+            f"Min salary: {min_s}\n"
+            f"Target salary: {target_s}\n"
+            f"Seniority: {seniority}\n"
+            f"Arrangement: {arrangement}\n"
+            f"Excluded companies: {excluded}\n"
+            f"Auto-apply: {auto}\n\n"
+            "Update with:\n"
+            "/prefs roles Backend Engineer,Staff Engineer\n"
+            "/prefs salary 180000 220000\n"
+            "/prefs seniority senior,staff,principal\n"
+            "/prefs arrangement remote,hybrid\n"
+            "/prefs autoapply 85\n"
+            "/prefs exclude Meta\n"
+            "/prefs unexclude Meta"
+        )
+        return
+
+    sub = args[0].lower()
+
+    if sub == "roles":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs roles <role1,role2,...>")
+            return
+        raw = " ".join(args[1:])
+        prefs.desired_roles = [r.strip().lower() for r in raw.split(",") if r.strip()]
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Desired roles set: {', '.join(prefs.desired_roles)}")
+
+    elif sub == "salary":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs salary <min> [target]")
+            return
+        try:
+            prefs.min_salary = int(args[1].replace(",", "").replace("$", ""))
+            if len(args) > 2:
+                prefs.target_salary = int(args[2].replace(",", "").replace("$", ""))
+        except ValueError:
+            await update.message.reply_text("Salary must be a number (e.g. 180000).")
+            return
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        msg = f"Salary floor set to ${prefs.min_salary:,}"
+        if prefs.target_salary:
+            msg += f", target ${prefs.target_salary:,}"
+        await update.message.reply_text(msg)
+
+    elif sub == "seniority":
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Usage: /prefs seniority <level1,level2,...>\n"
+                "Levels: junior, mid, senior, staff, principal, director"
+            )
+            return
+        raw = " ".join(args[1:])
+        prefs.seniority = [s.strip().lower() for s in raw.split(",") if s.strip()]
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Seniority set: {', '.join(prefs.seniority)}")
+
+    elif sub == "arrangement":
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Usage: /prefs arrangement <remote|hybrid|onsite> (comma-separated for multiple)"
+            )
+            return
+        raw = " ".join(args[1:])
+        valid = {"remote", "hybrid", "onsite"}
+        chosen = [a.strip().lower() for a in raw.split(",") if a.strip().lower() in valid]
+        if not chosen:
+            await update.message.reply_text(f"Valid options: {', '.join(sorted(valid))}")
+            return
+        prefs.work_arrangement = chosen
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Work arrangement set: {', '.join(prefs.work_arrangement)}")
+
+    elif sub == "autoapply":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs autoapply <0-100> (0 = disabled)")
+            return
+        try:
+            threshold = int(args[1])
+            if not (0 <= threshold <= 100):
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("Threshold must be 0-100. Use 0 to disable.")
+            return
+        prefs.auto_apply_threshold = threshold
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        if threshold == 0:
+            await update.message.reply_text("Auto-apply disabled. You'll always be asked.")
+        else:
+            await update.message.reply_text(
+                f"Auto-apply enabled at score >= {threshold}.\n"
+                "Jobs that hit the threshold AND pass all your filters will be submitted without asking."
+            )
+
+    elif sub == "exclude":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs exclude <company name>")
+            return
+        company = " ".join(args[1:])
+        if company not in prefs.excluded_companies:
+            prefs.excluded_companies.append(company)
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Added to exclusion list: {company}")
+
+    elif sub == "unexclude":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs unexclude <company name>")
+            return
+        company = " ".join(args[1:])
+        prefs.excluded_companies = [c for c in prefs.excluded_companies if c.lower() != company.lower()]
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Removed from exclusion list: {company}")
+
+    else:
+        await update.message.reply_text(
+            "Unknown subcommand. Options: roles, salary, seniority, arrangement, autoapply, exclude, unexclude"
+        )
+
+
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start an achievement-mining interview to enrich the candidate profile."""
     if not _auth(update, context):
@@ -522,7 +684,10 @@ async def _handle_profile_answer(
 
 
 async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
+    """Handle a job URL: fetch, analyze, evaluate fit, generate materials, then show informed Y/N."""
     registry: AdapterRegistry = context.bot_data["registry"]
+    profile: dict = context.bot_data["profile"]
+    db: ApplicationDB = context.bot_data["db"]
     adapter = registry.get(url)
 
     if not adapter:
@@ -534,7 +699,7 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         )
         return
 
-    await update.message.reply_text("Fetching job info...")
+    await update.message.reply_text("Fetching and analyzing job...")
 
     try:
         job_info = await adapter.fetch_job_info(url)
@@ -542,71 +707,53 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         await update.message.reply_text(f"Could not fetch that URL: {e}")
         return
 
-    fields = await adapter.extract_fields(url)
-    pending = PendingJob(url=url, job_info=job_info, fields=fields)
-    context.user_data[PENDING_JOB] = pending
-
-    await update.message.reply_text(
-        f"*{job_info.title}* at *{job_info.company}*\n\nApply? Reply Y to apply, N to skip.",
-        parse_mode="Markdown",
-    )
-
-
-async def _proceed_with_application(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    pending: PendingJob,
-) -> None:
-    profile: dict = context.bot_data["profile"]
-    registry: AdapterRegistry = context.bot_data["registry"]
-    db: ApplicationDB = context.bot_data["db"]
-
-    await update.message.reply_text("Analyzing job and generating tailored materials...")
-
-    # Analyze job
+    # Run full analysis immediately — user sees informed Y/N, not a blind one
     try:
-        job_analysis = await analyze_job(pending.job_info.raw_html, profile)
+        job_analysis = await analyze_job(job_info.raw_html, profile)
     except LLMError as e:
-        await update.message.reply_text(f"LLM error during analysis: {e}")
+        await update.message.reply_text(f"Analysis failed: {e}")
         return
 
-    # Generate tailored resume (stored for later retrieval)
+    # Evaluate fit against preferences
+    prefs = load_preferences(profile)
+    fit = evaluate_fit(job_analysis, prefs)
+
+    # Hard pass — don't bother the user with Y/N
+    if fit.hard_pass:
+        await db.insert_application(ApplicationRecord(
+            url=url,
+            title=job_info.title,
+            company=job_info.company,
+            site=adapter.name,
+            status="skipped",
+            notes=f"Auto-skipped: {fit.hard_pass_reason}",
+        ))
+        await update.message.reply_text(f"Auto-skipped: {fit.hard_pass_reason}")
+        return
+
+    # Generate tailored materials
     tailored_resume_text = ""
+    cover_letter_text = ""
     try:
         tailored_resume_text = await tailor_resume(job_analysis, profile)
     except LLMError as e:
-        logger.warning("tailor_resume failed: %s — continuing without it", e)
-
-    # Generate cover letter
-    cover_letter_text = ""
+        logger.warning("tailor_resume failed: %s", e)
     try:
         cover_letter_text = await generate_cover_letter(job_analysis, profile)
     except LLMError as e:
         logger.warning("generate_cover_letter failed: %s", e)
 
-    # Store on pending so _submit_application can persist them
-    pending.cover_letter = cover_letter_text
-    pending.tailored_resume = tailored_resume_text
-
-    # Show cover letter preview + match score before proceeding
-    if cover_letter_text:
-        preview = cover_letter_text[:400] + ("..." if len(cover_letter_text) > 400 else "")
-        await update.message.reply_text(
-            f"Match score: *{job_analysis.match_score}/100*\n\n"
-            f"Cover letter preview:\n{preview}",
-            parse_mode="Markdown",
-        )
-
-    # Generate field answers
+    # Pre-fill form fields
+    fields = await adapter.extract_fields(url)
     needs_user_input: list[int] = []
-    for i, form_field in enumerate(pending.fields):
+    for i, form_field in enumerate(fields):
         if form_field.field_type == "file":
             form_field.answer = profile.get("resume_path", "")
             continue
         try:
             hint = field_answer_hint(form_field)
             answer = await generate_field_answer(
-                form_field.label, f"Job: {pending.job_info.title}", profile, job_analysis,
+                form_field.label, f"Job: {job_info.title}", profile, job_analysis,
                 field_hint=hint,
             )
             if answer.startswith("NEEDS_USER_INPUT:"):
@@ -616,32 +763,82 @@ async def _proceed_with_application(
         except LLMError:
             needs_user_input.append(i)
 
-    # Attach cover letter to first cover letter field
     cover_field_idx = next(
-        (i for i, f in enumerate(pending.fields) if "cover" in f.label.lower()), None
+        (i for i, f in enumerate(fields) if "cover" in f.label.lower()), None
     )
-    if cover_field_idx is not None and pending.fields[cover_field_idx].answer == "" and cover_letter_text:
-        pending.fields[cover_field_idx].answer = cover_letter_text
+    if cover_field_idx is not None and fields[cover_field_idx].answer == "" and cover_letter_text:
+        fields[cover_field_idx].answer = cover_letter_text
         if cover_field_idx in needs_user_input:
             needs_user_input.remove(cover_field_idx)
 
+    pending = PendingJob(
+        url=url,
+        job_info=job_info,
+        fields=fields,
+        cover_letter=cover_letter_text,
+        tailored_resume=tailored_resume_text,
+        fit_report=fit,
+    )
     if needs_user_input:
-        # Store which fields still need user input
-        pending.awaiting_fields = [pending.fields[i] for i in needs_user_input]
+        pending.awaiting_fields = [fields[i] for i in needs_user_input]
+
+    # Auto-apply: threshold met, all fit checks pass, no fields needing user input
+    if fit.auto_apply and not needs_user_input:
+        fit_lines = fit_summary_lines(job_analysis, fit)
+        summary = "\n".join(fit_lines)
+        await update.message.reply_text(
+            f"Auto-applying to *{job_info.title}* at *{job_info.company}* "
+            f"(score {job_analysis.match_score}/100 \u2265 threshold {prefs.auto_apply_threshold})\n"
+            + (f"{summary}\n" if summary else ""),
+            parse_mode="Markdown",
+        )
+        await _submit_application(update, context, pending)
+        return
+
+    # Build informed Y/N prompt
+    fit_lines = fit_summary_lines(job_analysis, fit)
+    fit_block = ("\n" + "\n".join(fit_lines)) if fit_lines else ""
+    cover_preview = ""
+    if cover_letter_text:
+        cover_preview = "\n\nCover letter preview:\n" + cover_letter_text[:300] + (
+            "..." if len(cover_letter_text) > 300 else ""
+        )
+    manual_note = ""
+    if needs_user_input:
+        manual_note = f"\n\n({len(needs_user_input)} field(s) need your input after Y)"
+
+    context.user_data[PENDING_JOB] = pending
+    await update.message.reply_text(
+        f"*{job_info.title}* at *{job_info.company}*\n"
+        f"Match: *{job_analysis.match_score}/100*"
+        f"{fit_block}"
+        f"{cover_preview}"
+        f"{manual_note}\n\n"
+        "Apply? Y / N",
+        parse_mode="Markdown",
+    )
+
+
+async def _proceed_with_application(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    pending: PendingJob,
+) -> None:
+    """User confirmed Y. Materials are already generated. Start field prompts or submit."""
+    if pending.awaiting_fields:
         pending.current_field_index = 0
         context.user_data[PENDING_JOB] = pending
         context.user_data[AWAITING_FIELD] = True
-
         form_field = pending.awaiting_fields[0]
         await update.message.reply_text(
             f"I need a few answers before I can apply.\n\n"
             f"*{form_field.label}*: This field is required but is not in your profile.\n\n"
-            f"Please answer:",
+            "Please answer:",
             parse_mode="Markdown",
         )
         return
 
-    # All fields resolved — submit
+    # All fields resolved — submit directly
     await _submit_application(update, context, pending)
 
 
@@ -768,23 +965,36 @@ async def _compose_offer_reply(
     """Use Claude CLI to write a professional offer response.
 
     user_input is the user's intent: accept / decline / counter with details.
+    Includes salary context (target_salary from preferences) when countering.
     """
     name = profile.get("name", "")
     safe_body = _sanitize_email_text(thread.body_preview)
+
+    # Include salary context so Claude can reference target numbers when countering
+    prefs = load_preferences(profile)
+    salary_context = ""
+    if prefs.target_salary:
+        salary_context = f"CANDIDATE'S TARGET SALARY: ${prefs.target_salary:,} per year\n"
+    elif prefs.min_salary:
+        salary_context = f"CANDIDATE'S MINIMUM ACCEPTABLE SALARY: ${prefs.min_salary:,} per year\n"
+
     prompt = (
         f"Write a short, professional reply to a job offer email.\n\n"
         f"OFFER EMAIL:\n"
         f"From: {thread.from_address}\n"
         f"Subject: {thread.subject}\n"
         f"Message: {safe_body}\n\n"
-        f"CANDIDATE NAME: {name}\n\n"
+        f"CANDIDATE NAME: {name}\n"
+        f"{salary_context}\n"
         f"CANDIDATE'S INTENT:\n{user_input}\n\n"
         "Write ONLY the email body (no subject line, no headers).\n"
         "Keep it to 3-5 sentences. Be warm and professional.\n"
         "If accepting: express genuine enthusiasm and confirm any next steps.\n"
         "If declining: be gracious and keep the door open.\n"
         "If countering: state the counter clearly and professionally, "
-        "framing it as a question rather than a demand.\n"
+        "framing it as a question rather than a demand. "
+        "If a target salary is provided above, use it as the counter number "
+        "unless the candidate's intent specifies a different amount.\n"
         "Use the candidate's intent exactly — do not invent details."
     )
     return await claude_call(prompt, max_tokens=400)

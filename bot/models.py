@@ -46,6 +46,18 @@ class ApplicationResult:
 
 
 @dataclass
+class JobPreferences:
+    """User's job search preferences. Loaded from profile.yaml `job_preferences:` block."""
+    desired_roles: list[str] = field(default_factory=list)
+    min_salary: int = 0            # annual USD (0 = no floor set)
+    target_salary: int = 0         # annual USD (0 = not set)
+    seniority: list[str] = field(default_factory=list)
+    work_arrangement: list[str] = field(default_factory=list)  # "remote"|"hybrid"|"onsite"
+    excluded_companies: list[str] = field(default_factory=list)
+    auto_apply_threshold: int = 0  # match_score >= this + all fit checks pass → apply without Y/N (0 = disabled)
+
+
+@dataclass
 class JobAnalysis:
     title: str
     company: str
@@ -57,6 +69,34 @@ class JobAnalysis:
     company_tone: str = "formal"  # "formal" | "casual" | "mission-driven" | "technical"
     ats_keywords: list[str] = field(default_factory=list)
     why_this_role: str = ""
+    # Salary intelligence
+    salary_min: int = 0            # annual USD from posting (0 if not stated)
+    salary_max: int = 0            # annual USD from posting (0 if not stated)
+    salary_currency: str = "USD"
+    salary_is_estimated: bool = False  # True when LLM estimated (not from posting)
+    # Role classification
+    seniority_level: str = "unknown"  # "junior"|"mid"|"senior"|"staff"|"principal"|"director"|"unknown"
+    work_arrangement: str = "unknown" # "remote"|"hybrid"|"onsite"|"unknown"
+    role_type: str = ""               # normalised role category e.g. "software engineer"
+
+
+@dataclass
+class FitReport:
+    """Result of evaluating a job against the user's preferences."""
+    salary_ok: bool = True
+    salary_note: str = ""
+    role_ok: bool = True
+    role_note: str = ""
+    seniority_ok: bool = True
+    seniority_note: str = ""
+    arrangement_ok: bool = True
+    arrangement_note: str = ""
+    excluded_company: bool = False
+    # hard_pass: auto-skip without asking (excluded company, or salary drastically below floor)
+    hard_pass: bool = False
+    hard_pass_reason: str = ""
+    # auto_apply: skip Y/N and go straight to submit
+    auto_apply: bool = False
 
 
 @dataclass
@@ -69,6 +109,7 @@ class PendingJob:
     app_id: int | None = None
     cover_letter: str = ""
     tailored_resume: str = ""
+    fit_report: "FitReport | None" = None
 
 
 @dataclass

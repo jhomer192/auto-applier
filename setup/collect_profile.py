@@ -124,6 +124,13 @@ def main() -> None:
         "requires_sponsorship": ask("Requires visa sponsorship? (yes/no)").lower() in ("yes", "y"),
     }
 
+    print("")
+    print("-- Job Preferences (optional but recommended) --")
+    print("These tell the bot which jobs to target, auto-skip, or auto-apply to.")
+    print("Press Enter to skip any field.")
+    print("")
+    profile["job_preferences"] = _collect_preferences()
+
     output_path = Path("profile.yaml")
     with open(output_path, "w") as f:
         yaml.dump(profile, f, default_flow_style=False, allow_unicode=True)
@@ -131,8 +138,66 @@ def main() -> None:
     print("")
     print("Profile saved to: " + str(output_path.absolute()))
     print("You can edit profile.yaml directly at any time.")
+    print("You can also update preferences at any time with /prefs in Telegram.")
 
     _setup_gmail_env()
+
+
+def _collect_preferences() -> dict:
+    """Collect job preferences interactively. All fields optional."""
+    prefs: dict = {}
+
+    # Desired roles
+    roles_raw = ask("Desired role types, comma-separated (e.g. Software Engineer,Backend Engineer)")
+    if roles_raw:
+        prefs["desired_roles"] = [r.strip().lower() for r in roles_raw.split(",") if r.strip()]
+
+    # Salary
+    min_sal_raw = ask("Minimum acceptable annual salary in USD (e.g. 180000)")
+    if min_sal_raw:
+        try:
+            prefs["min_salary"] = int(min_sal_raw.replace(",", "").replace("$", ""))
+        except ValueError:
+            print("  Skipping — could not parse salary.")
+    target_sal_raw = ask("Target annual salary in USD (e.g. 220000)")
+    if target_sal_raw:
+        try:
+            prefs["target_salary"] = int(target_sal_raw.replace(",", "").replace("$", ""))
+        except ValueError:
+            print("  Skipping — could not parse salary.")
+
+    # Seniority
+    sen_raw = ask("Acceptable seniority levels, comma-separated (junior/mid/senior/staff/principal/director)")
+    if sen_raw:
+        prefs["seniority"] = [s.strip().lower() for s in sen_raw.split(",") if s.strip()]
+
+    # Work arrangement
+    arr_raw = ask("Work arrangement preference, comma-separated (remote/hybrid/onsite)")
+    if arr_raw:
+        valid = {"remote", "hybrid", "onsite"}
+        chosen = [a.strip().lower() for a in arr_raw.split(",") if a.strip().lower() in valid]
+        if chosen:
+            prefs["work_arrangement"] = chosen
+
+    # Excluded companies
+    exc_raw = ask("Companies to exclude, comma-separated (e.g. Meta,Amazon)")
+    if exc_raw:
+        prefs["excluded_companies"] = [c.strip() for c in exc_raw.split(",") if c.strip()]
+
+    # Auto-apply threshold
+    print("")
+    print("Auto-apply: when a job's match score meets the threshold AND all filters pass,")
+    print("the bot submits the application without asking you. Set 0 to always ask.")
+    auto_raw = ask("Auto-apply threshold (0-100, 0 = disabled)")
+    if auto_raw:
+        try:
+            val = int(auto_raw)
+            if 0 <= val <= 100:
+                prefs["auto_apply_threshold"] = val
+        except ValueError:
+            print("  Skipping — invalid number.")
+
+    return prefs
 
 
 def _setup_gmail_env() -> None:

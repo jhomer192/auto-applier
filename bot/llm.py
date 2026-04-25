@@ -110,9 +110,8 @@ async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
 async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
     """Analyze a job posting against a candidate profile.
 
-    Extracts structured signals from the job description — required/preferred skills,
-    key responsibilities, company tone, ATS keywords, and a distinctive role summary —
-    in addition to the basic title/company/match fields.
+    Extracts structured signals: skills, responsibilities, tone, ATS keywords, salary,
+    seniority level, work arrangement, and a normalised role type — all in one LLM call.
 
     Args:
         job_html: Raw HTML of the job posting (truncated to 8000 chars internally).
@@ -138,21 +137,37 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
         '  "key_responsibilities": ["<responsibility>", ...],\n'
         '  "company_tone": "<one of: formal | casual | mission-driven | technical>",\n'
         '  "ats_keywords": ["<exact phrase from JD>", ...],\n'
-        '  "why_this_role": "<one sentence: what makes this specific role distinctive>"\n'
+        '  "why_this_role": "<one sentence: what makes this specific role distinctive>",\n'
+        '  "salary_min": <annual USD integer, 0 if not stated>,\n'
+        '  "salary_max": <annual USD integer, 0 if not stated>,\n'
+        '  "salary_currency": "<e.g. USD>",\n'
+        '  "salary_is_estimated": <true if you estimated, false if explicitly posted>,\n'
+        '  "seniority_level": "<one of: junior | mid | senior | staff | principal | director | unknown>",\n'
+        '  "work_arrangement": "<one of: remote | hybrid | onsite | unknown>",\n'
+        '  "role_type": "<short normalised role category, e.g. software engineer | data scientist>"\n'
         "}\n\n"
-        "Guidelines for each field:\n"
-        "- required_skills: skills the JD explicitly marks as required or must-have (up to 10)\n"
-        "- preferred_skills: skills listed as nice-to-have or preferred (up to 8)\n"
-        "- key_responsibilities: the main things this person will do day-to-day (up to 6)\n"
-        "- company_tone: choose the single best descriptor for the JD's writing style\n"
-        "- ats_keywords: exact noun phrases and skill names from the JD that ATS systems scan for (up to 15)\n"
-        "- why_this_role: one sentence capturing what is unique or distinctive about this particular role\n\n"
+        "Guidelines:\n"
+        "- required_skills: explicitly required (up to 10)\n"
+        "- preferred_skills: nice-to-have (up to 8)\n"
+        "- key_responsibilities: main day-to-day duties (up to 6)\n"
+        "- company_tone: single best descriptor for the JD's writing style\n"
+        "- ats_keywords: exact noun phrases ATS systems scan for (up to 15)\n"
+        "- salary_min/salary_max: convert hourly/monthly to annual if needed;\n"
+        "  if the JD does not state salary, estimate based on role/level/location/company size\n"
+        "  and set salary_is_estimated=true\n"
+        "- seniority_level: infer from title keywords (Senior/Staff/Principal/etc.) or JD text\n"
+        "- work_arrangement: look for Remote/Hybrid/In-office/On-site language\n"
+        "- role_type: normalised lowercase category (ignore seniority prefix)\n\n"
         f"{GROUNDING_CONSTRAINT}"
     )
     raw = await claude_call(prompt)
     if "```" in raw:
         raw = raw.split("```")[1].lstrip("json").strip()
     data = json.loads(raw)
+    # Pop unknown keys so JobAnalysis(**data) doesn't break on old/extra fields
+    known = {f.name for f in JobAnalysis.__dataclass_fields__.values()} if hasattr(JobAnalysis, '__dataclass_fields__') else set()
+    if known:
+        data = {k: v for k, v in data.items() if k in known}
     return JobAnalysis(**data)
 
 
