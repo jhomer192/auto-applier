@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Advanced Scraper Test Fixtures</title>
+</head>
+<body>
+  <h1>Advanced Field Extraction Test Page</h1>
+
+  <!--
+    This page tests edge cases in extract_fields_from_page:
+      - Radio button group
+      - Select with <optgroup>
+      - Disabled input (should be skipped — not visible/interactive)
+      - Readonly input (IS visible, rendered, accessible — should be included)
+      - aria-required on textarea
+      - Input with display:none (skipped)
+      - aria-labelledby label resolution
+  -->
+
+  <form id="advanced-form">
+
+    <!-- ── Radio buttons ─────────────────────────── -->
+    <fieldset id="availability-group">
+      <legend>Availability</legend>
+
+      <label>
+        <input type="radio" name="availability" value="immediate" id="avail-immediate">
+        Immediate
+      </label>
+      <label>
+        <input type="radio" name="availability" value="two-weeks" id="avail-twoweeks">
+        2 weeks notice
+      </label>
+      <label>
+        <input type="radio" name="availability" value="one-month" id="avail-month">
+        1 month notice
+      </label>
+    </fieldset>
+
+    <!-- ── Select with optgroup ──────────────────── -->
+    <label for="department">Department</label>
+    <select id="department" name="department">
+      <option value="">Choose department...</option>
+      <optgroup label="Engineering">
+        <option value="backend">Backend</option>
+        <option value="frontend">Frontend</option>
+        <option value="infra">Infrastructure</option>
+      </optgroup>
+      <optgroup label="Product">
+        <option value="pm">Product Manager</option>
+        <option value="design">Design</option>
+      </optgroup>
+    </select>
+
+    <!-- ── Select with placeholder-only option ─────── -->
+    <label for="empty-select">Empty Select</label>
+    <select id="empty-select" name="empty-select">
+      <option value="">Please choose...</option>
+    </select>
+
+    <!-- ── Readonly text input ───────────────────── -->
+    <label for="readonly-field">Company Name (pre-filled)</label>
+    <input id="readonly-field" name="company" type="text" readonly value="Acme Corp">
+
+    <!-- ── Textarea with aria-required ──────────────────── -->
+    <div id="cover-letter-label">Cover Letter</div>
+    <textarea id="cover-letter" name="cover_letter" aria-labelledby="cover-letter-label"
+              aria-required="true" rows="5"></textarea>
+
+    <!-- ── Disabled input — should NOT be visible per getBoundingClientRect ─ -->
+    <!--
+      NOTE: disabled inputs CAN be visible (they render, just aren't interactive).
+      The scraper's isVisible() checks computed style + bounding rect — disabled
+      inputs still have size. We test that disabled inputs ARE extracted (the
+      scraper does not filter disabled; it's the adapter's responsibility to skip
+      them). This matches real-world behavior.
+    -->
+    <label for="disabled-field">Referral Code (optional)</label>
+    <input id="disabled-field" name="referral_code" type="text" disabled>
+
+    <!-- ── Hidden input — should be skipped ─────────────── -->
+    <input type="hidden" name="csrf_token" value="abc123">
+
+    <!-- ── display:none field — should be skipped ──────── -->
+    <label for="hidden-field" style="display:none">Invisible Field</label>
+    <input id="hidden-field" name="invisible" type="text" style="display:none">
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

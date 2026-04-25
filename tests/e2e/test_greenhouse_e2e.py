@@ -166,3 +166,92 @@ async def test_submit_records_submitted_fields(http_server, adapter, resume_pdf)
     result = await adapter.submit_application(url, fields, resume_pdf)
     assert "First Name" in result.submitted_fields
     assert "Email" in result.submitted_fields
+
+
+# ── Checkbox toggle ───────────────────────────────────────────────────────────
+
+async def test_submit_unchecks_prechecked_checkbox(http_server, adapter, resume_pdf):
+    """Checkbox that starts checked + answer='no' → must be unchecked after fill."""
+    url = f"{http_server}/application/greenhouse_prechecked.html"
+    fields = [
+        FormField(label="First Name", field_type="text", required=True,
+                  selector="#first_name", answer="Jane"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="jane@example.com"),
+        FormField(label="Subscribe to marketing emails", field_type="checkbox",
+                  required=False, selector="#subscribe", answer="no"),
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert result.submitted_fields.get("Subscribe to marketing emails") == "no"
+
+
+async def test_submit_leaves_prechecked_checkbox_checked(http_server, adapter, resume_pdf):
+    """Checkbox that starts checked + answer='yes' → must remain checked."""
+    url = f"{http_server}/application/greenhouse_prechecked.html"
+    fields = [
+        FormField(label="First Name", field_type="text", required=True,
+                  selector="#first_name", answer="Jane"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="jane@example.com"),
+        FormField(label="Subscribe to marketing emails", field_type="checkbox",
+                  required=False, selector="#subscribe", answer="yes"),
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert result.submitted_fields.get("Subscribe to marketing emails") == "yes"
+
+
+# ── Special characters in answers ─────────────────────────────────────────────
+
+async def test_submit_handles_apostrophe_in_name(http_server, adapter, resume_pdf):
+    """Name with apostrophe (O'Brien) must be typed correctly."""
+    url = f"{http_server}/application/greenhouse.html"
+    fields = [
+        FormField(label="First Name", field_type="text", required=True,
+                  selector="#first_name", answer="O'Brien"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="obrien@example.com"),
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert result.submitted_fields.get("First Name") == "O'Brien"
+
+
+async def test_submit_handles_unicode_name(http_server, adapter, resume_pdf):
+    """Name with non-ASCII characters (e.g. accented letters) must be typed correctly."""
+    url = f"{http_server}/application/greenhouse.html"
+    fields = [
+        FormField(label="First Name", field_type="text", required=True,
+                  selector="#first_name", answer="Ève"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="eve@example.com"),
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert result.submitted_fields.get("First Name") == "Ève"
+
+
+async def test_submit_handles_long_cover_letter(http_server, adapter, resume_pdf):
+    """Cover letter >120 chars should use paste-mode typing and still submit successfully."""
+    long_letter = (
+        "I am excited to apply for this position. "
+        "Over the past five years I have built distributed systems at scale, "
+        "led cross-functional teams, and shipped products used by millions of users. "
+        "I believe my background in backend engineering and infrastructure makes me "
+        "an excellent candidate for this role."
+    )
+    assert len(long_letter) > 120, "Test precondition: long_letter must exceed HUMAN_TYPE_MAX_CHARS"
+
+    url = f"{http_server}/application/greenhouse.html"
+    fields = [
+        FormField(label="First Name", field_type="text", required=True,
+                  selector="#first_name", answer="Jane"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="#email", answer="jane@example.com"),
+        FormField(label="Cover Letter", field_type="textarea", required=False,
+                  selector="#cover_letter", answer=long_letter),
+    ]
+    result = await adapter.submit_application(url, fields, resume_pdf)
+    assert result.success is True
+    assert result.submitted_fields.get("Cover Letter") == long_letter

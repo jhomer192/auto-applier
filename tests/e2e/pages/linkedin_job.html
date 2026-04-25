@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Software Engineer at Acme Corp | LinkedIn</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5); z-index: 99;
+    }
+    #modal {
+      display: none; position: fixed;
+      top: 10%; left: 50%; transform: translateX(-50%);
+      width: 480px; background: white;
+      border: 1px solid #ccc; border-radius: 8px;
+      padding: 24px; z-index: 100;
+    }
+    #modal label { display: block; margin-top: 12px; font-weight: bold; }
+    #modal input { width: 100%; padding: 6px; margin-top: 4px; box-sizing: border-box; }
+    #modal button { margin-top: 16px; padding: 8px 16px; cursor: pointer; }
+    .dismiss-btn { position: absolute; top: 12px; right: 12px; }
+    #success-banner { display: none; background: #e6f4ea; padding: 16px; border-radius: 4px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+
+  <!-- Job details (LinkedIn-specific selectors used by the adapter) -->
+  <h1 class="job-details-jobs-unified-top-card__job-title">Software Engineer</h1>
+  <div class="job-details-jobs-unified-top-card__company-name">Acme Corp</div>
+  <p>Join our team and build the future. Remote-friendly, great benefits.</p>
+
+  <!-- Easy Apply button -->
+  <button class="jobs-apply-button" onclick="openModal()">Easy Apply</button>
+
+  <!-- Modal overlay (clicking outside closes modal) -->
+  <div id="modal-overlay" onclick="closeModal()"></div>
+
+  <!-- Easy Apply modal -->
+  <div id="modal">
+    <h2 style="margin-top:0">Easy Apply</h2>
+
+    <!-- Step 1: contact info -->
+    <div id="modal-content">
+      <label for="full-name">Full Name</label>
+      <input id="full-name" name="fullName" type="text" required>
+
+      <label for="email-addr">Email Address</label>
+      <input id="email-addr" name="email" type="email" required>
+
+      <button id="btn-next" onclick="goToStep2()">Next</button>
+    </div>
+
+    <button class="dismiss-btn" aria-label="Dismiss" onclick="closeModal()">&#x2715;</button>
+  </div>
+
+  <!-- Success banner (shown after submission) -->
+  <div id="success-banner">
+    <strong>Your application was sent</strong> to Acme Corp.
+  </div>
+
+  <script>
+    function openModal() {
+      document.getElementById('modal').style.display = 'block';
+      document.getElementById('modal-overlay').style.display = 'block';
+    }
+
+    function closeModal() {
+      document.getElementById('modal').style.display = 'none';
+      document.getElementById('modal-overlay').style.display = 'none';
+    }
+
+    function goToStep2() {
+      // Replace step 1 content with step 2 — this removes the Next button
+      // and adds the Submit button, preventing the adapter from seeing
+      // Submit early (Playwright .count() includes hidden elements).
+      document.getElementById('modal-content').innerHTML = `
+        <label>Phone Number</label>
+        <input id="phone-num" name="phone" type="tel">
+
+        <label>Resume</label>
+        <input id="resume-file" name="resume" type="file" required>
+
+        <button aria-label="Submit application">Submit application</button>
+      `;
+    }
+
+    // Submit button click → close modal, show success banner
+    document.addEventListener('click', function(e) {
+      if (e.target && e.target.getAttribute('aria-label') === 'Submit application') {
+        closeModal();
+        document.getElementById('success-banner').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

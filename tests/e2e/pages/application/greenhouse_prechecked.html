@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pre-checked Checkbox Test — Greenhouse-style</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    label { display: block; margin: 12px 0 4px; font-weight: bold; }
+    input[type="text"], input[type="email"] { width: 300px; padding: 6px; }
+    button[type="submit"] { margin-top: 20px; padding: 10px 24px; }
+  </style>
+</head>
+<body>
+  <h1>Test Application — Pre-checked Checkbox</h1>
+  <form id="application-form">
+    <label for="first_name">First Name *</label>
+    <input id="first_name" name="first_name" type="text" required>
+
+    <label for="email">Email *</label>
+    <input id="email" name="email" type="email" required>
+
+    <!--
+      This checkbox starts CHECKED. Tests verify that:
+        - answer="no"  → adapter unchecks it  (not should_check + is_checked → uncheck)
+        - answer="yes" → adapter leaves it checked (should_check + is_checked → no-op)
+    -->
+    <label>
+      <input id="subscribe" name="subscribe" type="checkbox" checked>
+      Subscribe to marketing emails
+    </label>
+
+    <button type="submit">Submit Application</button>
+  </form>
+
+  <div id="confirmation" style="display:none">
+    <p>Application submitted!</p>
+    <p>Thank you for applying. We will review your application shortly.</p>
+  </div>
+
+  <script>
+    document.getElementById('application-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('application-form').style.display = 'none';
+      document.getElementById('confirmation').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
