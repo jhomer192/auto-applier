@@ -1,8 +1,12 @@
 import asyncio
 import json
+import logging
+import re
 import subprocess
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from bot.models import JobAnalysis
 
@@ -79,12 +83,51 @@ class LLMError(Exception):
     pass
 
 
+def _extract_json(raw: str) -> str:
+    """Extract a JSON object or array from a string that may be wrapped in code fences.
+
+    Handles all common Claude output patterns:
+      - Plain JSON
+      - ```json ... ```
+      - ``` ... ```
+      - Leading/trailing prose with embedded JSON
+    """
+    stripped = raw.strip()
+
+    # Fast path — bare JSON
+    if stripped.startswith(("{", "[")):
+        return stripped
+
+    # Try to extract from any code fence: ```json, ```JSON, ```\n, etc.
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        if candidate.startswith(("{", "[")):
+            return candidate
+
+    # Last resort: find the first '{' and last '}' in the raw text
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        return stripped[start : end + 1]
+
+    return stripped  # caller will get a json.JSONDecodeError with useful context
+
+
 async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
     """Run `claude -p <prompt>` in a thread to avoid blocking the event loop.
 
+    Retries up to 3 times on transient failures (timeout, empty output, non-zero
+    exit that looks like a rate-limit or overload error). Permanent errors (e.g.
+    CLI not found, auth failure) are raised immediately.
+
     Raises:
-        LLMError: If the CLI exits non-zero or returns empty output.
+        LLMError: If all retry attempts fail or a permanent error occurs.
     """
+    _TRANSIENT_EXIT_CODES = {1}  # claude CLI uses exit 1 for overload/timeout
+    _MAX_ATTEMPTS = 3
+    _BACKOFF = [2, 4, 8]  # seconds between retries
+
     def _run() -> str:
         try:
             result = subprocess.run(
@@ -95,16 +138,33 @@ async def claude_call(prompt: str, max_tokens: int = 2000) -> str:
             )
         except FileNotFoundError:
             raise LLMError("claude CLI not found — install it: npm install -g @anthropic-ai/claude-code")
+        except subprocess.TimeoutExpired:
+            raise LLMError("claude CLI timed out after 120 s")
         if result.returncode != 0:
-            raise LLMError(
-                f"claude CLI failed (exit {result.returncode}): {result.stderr.strip()}"
-            )
+            stderr = result.stderr.strip()
+            raise LLMError(f"claude CLI failed (exit {result.returncode}): {stderr}")
         output = result.stdout.strip()
         if not output:
             raise LLMError("claude CLI returned empty output")
         return output
 
-    return await asyncio.to_thread(_run)
+    last_err: LLMError | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            return await asyncio.to_thread(_run)
+        except LLMError as e:
+            last_err = e
+            msg = str(e)
+            # Don't retry permanent errors
+            if "not found" in msg or "auth" in msg.lower():
+                raise
+            if attempt < _MAX_ATTEMPTS - 1:
+                wait = _BACKOFF[attempt]
+                logger.warning("claude_call: transient error (attempt %d/%d), retrying in %ds: %s",
+                               attempt + 1, _MAX_ATTEMPTS, wait, msg)
+                await asyncio.sleep(wait)
+
+    raise last_err  # type: ignore[misc]
 
 
 async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
@@ -169,9 +229,7 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
         f"{GROUNDING_CONSTRAINT}"
     )
     raw = await claude_call(prompt)
-    if "```" in raw:
-        raw = raw.split("```")[1].lstrip("json").strip()
-    data = json.loads(raw)
+    data = json.loads(_extract_json(raw))
     # Pop unknown keys so JobAnalysis(**data) doesn't break on old/extra fields
     known = {f.name for f in JobAnalysis.__dataclass_fields__.values()} if hasattr(JobAnalysis, '__dataclass_fields__') else set()
     if known:

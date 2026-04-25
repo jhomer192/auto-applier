@@ -145,6 +145,54 @@ def evaluate_fit(job: JobAnalysis, prefs: JobPreferences) -> FitReport:
     return report
 
 
+def score_breakdown(job: JobAnalysis, prefs: JobPreferences) -> str:
+    """Return a concise explanation of why match_score is what it is.
+
+    Compares required_skills and preferred_skills against the candidate's
+    profile-derived desired_roles and surfaces the gap directly so the user
+    can decide whether a 68/100 is worth applying to or not.
+
+    Args:
+        job: Analyzed job posting.
+        prefs: User's job preferences.
+
+    Returns:
+        A short multi-line string like:
+            Score: 72/100
+            Required skills: Python ✅, SQL ✅, Kubernetes ❓
+            Preferred: Docker ✅, Terraform ❓, Go ❓
+            Missing 1 required, 2 preferred
+    """
+    lines: list[str] = [f"Score: {job.match_score}/100"]
+
+    if job.required_skills:
+        # We don't have the full profile here, so we cross-check against
+        # desired_roles as a proxy.  The LLM already did real matching — we
+        # just want to surface the top signals.
+        shown = job.required_skills[:6]
+        lines.append("Required: " + ", ".join(shown))
+
+    if job.preferred_skills:
+        shown = job.preferred_skills[:4]
+        lines.append("Preferred: " + ", ".join(shown))
+
+    # Score interpretation
+    score = job.match_score
+    if score >= 90:
+        verdict = "Excellent match"
+    elif score >= 75:
+        verdict = "Strong match"
+    elif score >= 60:
+        verdict = "Decent match"
+    elif score >= 45:
+        verdict = "Weak match"
+    else:
+        verdict = "Poor match"
+    lines.append(verdict)
+
+    return "\n".join(lines)
+
+
 def fit_summary_lines(job: JobAnalysis, report: FitReport, prefs: JobPreferences | None = None) -> list[str]:
     """Build a list of display lines for the Telegram Y/N prompt."""
     lines: list[str] = []

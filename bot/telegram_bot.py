@@ -17,7 +17,7 @@ from telegram.ext import (
 
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
-from bot.fit import evaluate_fit, fit_summary_lines
+from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
@@ -913,6 +913,10 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
     # Build informed Y/N prompt
     fit_lines = fit_summary_lines(job_analysis, fit, prefs)
     fit_block = ("\n" + "\n".join(fit_lines)) if fit_lines else ""
+
+    breakdown = score_breakdown(job_analysis, prefs)
+    breakdown_block = f"\n\n{breakdown}"
+
     cover_preview = ""
     if cover_letter_text:
         cover_preview = "\n\nCover letter preview:\n" + cover_letter_text[:300] + (
@@ -922,11 +926,17 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
     if needs_user_input:
         manual_note = f"\n\n({len(needs_user_input)} field(s) need your input after Y)"
 
+    threshold_hint = ""
+    if prefs.auto_apply_threshold > 0 and job_analysis.match_score < prefs.auto_apply_threshold:
+        gap = prefs.auto_apply_threshold - job_analysis.match_score
+        threshold_hint = f"\n(Score is {gap} pts below your auto-apply threshold of {prefs.auto_apply_threshold})"
+
     context.user_data[PENDING_JOB] = pending
     await update.message.reply_text(
-        f"*{job_info.title}* at *{job_info.company}*\n"
-        f"Match: *{job_analysis.match_score}/100*"
+        f"*{job_info.title}* at *{job_info.company}*"
         f"{fit_block}"
+        f"{breakdown_block}"
+        f"{threshold_hint}"
         f"{cover_preview}"
         f"{manual_note}\n\n"
         "Apply? Y / N",
@@ -1321,17 +1331,20 @@ async def _handle_batch_response(
 
     # Dismiss all non-selected pending jobs
     selected_ids = {j.id for j in selected}
+    dismissed_count = 0
     for job in batch:
         if job.id not in selected_ids:
             await db.update_queued_job_status(job.id, "dismissed")
+            dismissed_count += 1
 
     context.bot_data.pop(PENDING_BATCH, None)
 
     # Queue selected jobs for sequential processing
     context.bot_data[BATCH_QUEUE] = list(selected)
     count = len(selected)
+    dismissed_note = f" ({dismissed_count} others dismissed)" if dismissed_count else ""
     await update.message.reply_text(
-        f"Investigating {count} job{'s' if count != 1 else ''}. "
+        f"Investigating {count} job{'s' if count != 1 else ''}{dismissed_note}. "
         "I'll analyze them one at a time."
     )
     await _maybe_process_next_batch_item(update, context)

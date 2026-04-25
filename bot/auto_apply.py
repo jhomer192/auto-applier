@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from telegram import Bot
 
 from bot.db import ApplicationDB
-from bot.fit import evaluate_fit, fit_summary_lines
+from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
 from bot.models import ApplicationRecord, QueuedJob, SavedSearch
 from bot.profile import load_preferences
@@ -208,7 +208,11 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                     # Non-required unknown field — leave blank
                 else:
                     form_field.answer = answer
-            except LLMError:
+            except LLMError as llm_err:
+                logger.warning(
+                    "auto_apply: LLM error on field %r for %s: %s",
+                    form_field.label, queued_job.url, llm_err,
+                )
                 if form_field.required:
                     has_blocking_gap = True
                     break
@@ -241,7 +245,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                 db,
                 min_gap_minutes=prefs.min_apply_gap_minutes,
                 max_gap_minutes=prefs.max_apply_gap_minutes,
-                daily_cap=prefs.max_applies_per_day if prefs.max_applies_per_day > 0 else 30,
+                daily_cap=prefs.max_applies_per_day,
                 notify=_notify_wait,
             )
         except RateLimitExceeded as e:
@@ -250,8 +254,8 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                 await bot.send_message(chat_id=chat_id, text=str(e))
             except Exception:
                 pass
-            # Push remaining jobs back to review (they stay pending in DB)
-            needs_review.extend(pending[pending.index(queued_job):])
+            # This job and all remaining stay pending in DB; nothing to extend
+            break
             break
 
         # ----- Step 8: Submit -----
@@ -308,9 +312,10 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
 
         if result.success:
             confirmed = " ✅ confirmed" if result.submission_confirmed else " (unconfirmed)"
+            breakdown = score_breakdown(job_analysis, prefs)
             msg = (
-                f"🤖 *Auto-applied*: {job_info.title} at {job_info.company}"
-                f" (score {job_analysis.match_score}/100{confirmed})"
+                f"🤖 *Auto-applied*: {job_info.title} at {job_info.company}{confirmed}\n\n"
+                f"{breakdown}"
                 f"{fit_summary}"
             )
             extras = []

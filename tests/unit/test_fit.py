@@ -1,6 +1,6 @@
-"""Tests for bot/fit.py: evaluate_fit() and fit_summary_lines()."""
+"""Tests for bot/fit.py: evaluate_fit(), fit_summary_lines(), score_breakdown()."""
 import pytest
-from bot.fit import evaluate_fit, fit_summary_lines
+from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.models import FitReport, JobAnalysis, JobPreferences
 
 
@@ -263,3 +263,73 @@ def test_fit_summary_empty_when_no_notable_info():
     lines = fit_summary_lines(job, report)
     # Should be empty or nearly empty — nothing of note to surface
     assert all("unknown" not in l.lower() for l in lines)
+
+
+# ── score_breakdown ────────────────────────────────────────────────────────────
+
+def test_score_breakdown_contains_score():
+    job = make_job(match_score=72, required_skills=["Python", "SQL"], preferred_skills=["Docker"])
+    prefs = make_prefs()
+    result = score_breakdown(job, prefs)
+    assert "72/100" in result
+
+
+def test_score_breakdown_contains_required_skills():
+    job = make_job(required_skills=["Python", "SQL", "Kubernetes"])
+    prefs = make_prefs()
+    result = score_breakdown(job, prefs)
+    assert "Python" in result
+    assert "SQL" in result
+
+
+def test_score_breakdown_contains_preferred_skills():
+    job = make_job(preferred_skills=["Docker", "Terraform"])
+    prefs = make_prefs()
+    result = score_breakdown(job, prefs)
+    assert "Docker" in result
+
+
+def test_score_breakdown_verdict_excellent():
+    job = make_job(match_score=95)
+    assert "Excellent" in score_breakdown(job, make_prefs())
+
+
+def test_score_breakdown_verdict_strong():
+    job = make_job(match_score=80)
+    assert "Strong" in score_breakdown(job, make_prefs())
+
+
+def test_score_breakdown_verdict_decent():
+    job = make_job(match_score=62)
+    assert "Decent" in score_breakdown(job, make_prefs())
+
+
+def test_score_breakdown_verdict_weak():
+    job = make_job(match_score=50)
+    assert "Weak" in score_breakdown(job, make_prefs())
+
+
+def test_score_breakdown_verdict_poor():
+    job = make_job(match_score=30)
+    assert "Poor" in score_breakdown(job, make_prefs())
+
+
+def test_score_breakdown_empty_skills_no_crash():
+    """Should not crash when required/preferred skills are empty."""
+    job = make_job(match_score=60, required_skills=[], preferred_skills=[])
+    result = score_breakdown(job, make_prefs())
+    assert "60/100" in result
+
+
+def test_score_breakdown_caps_shown_skills():
+    """Should not dump all 10+ skills into the breakdown — cap at 6 required, 4 preferred."""
+    job = make_job(
+        required_skills=["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"],
+        preferred_skills=["Papa", "Quebec", "Romeo", "Sierra", "Tango"],
+    )
+    result = score_breakdown(job, make_prefs())
+    # Capped at 6 required → Golf and Hotel should not appear
+    assert "Golf" not in result
+    assert "Hotel" not in result
+    # Capped at 4 preferred → Tango should not appear
+    assert "Tango" not in result

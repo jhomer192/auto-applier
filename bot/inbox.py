@@ -16,6 +16,7 @@ import email.utils
 import imaplib
 import logging
 import smtplib
+import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -54,6 +55,19 @@ _REJECTION_SIGNALS = [
     "different direction", "not be able to move",
 ]
 
+# Strong rejection: unambiguous multi-word phrases — fire on 1 hit anywhere
+_STRONG_REJECTION_SIGNALS = {
+    "not moving forward", "will not be moving", "other candidates",
+    "not selected", "not a fit", "won't be moving", "position has been filled",
+    "filled the position", "not be continuing", "not be proceeding",
+    "regret to inform", "not be able to move",
+}
+
+# Weak rejection: single words/short phrases that can appear in positive context
+_WEAK_REJECTION_SIGNALS = {
+    "unfortunately", "decided to", "different direction",
+}
+
 _CONFIRMATION_SIGNALS = [
     "application received", "thank you for applying", "we received your application",
     "successfully submitted", "your application has been", "application confirmation",
@@ -66,29 +80,40 @@ def classify_email(thread: EmailThread) -> str:
     """Classify an inbound email as one of:
       'offer', 'interview', 'rejection', 'confirmation', 'other'
 
-    Uses keyword matching on subject + body preview. Fast, no LLM needed.
-    Priority order: rejection > offer > interview > confirmation > other.
+    Uses weighted keyword matching on subject + body preview. Fast, no LLM needed.
+
+    Thresholds prevent single-word false positives (e.g. "unfortunately your
+    interview went well" should NOT be classified as a rejection).
+
+    Priority order when tied: rejection > offer > interview > confirmation > other.
     """
-    text = (thread.subject + " " + thread.body_preview).lower()
+    subject_lower = thread.subject.lower()
+    body_lower = thread.body_preview.lower()
+    # Subject matches count double — subject is a more reliable signal
+    text_full = subject_lower + " " + subject_lower + " " + body_lower
 
-    rejection_hits = sum(1 for s in _REJECTION_SIGNALS if s in text)
-    offer_hits = sum(1 for s in _OFFER_SIGNALS if s in text)
-    interview_hits = sum(1 for s in _INTERVIEW_SIGNALS if s in text)
-    confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text)
+    offer_hits = sum(1 for s in _OFFER_SIGNALS if s in text_full)
+    interview_hits = sum(1 for s in _INTERVIEW_SIGNALS if s in text_full)
+    confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text_full)
 
-    # Explicit rejection wins over everything
-    if rejection_hits >= 1:
+    # Rejection: strong unambiguous phrases fire on 1 hit anywhere;
+    # weak ambiguous words ("unfortunately") require a hit in the subject
+    # (subject is far more reliable) or 2+ hits total across subject + body.
+    strong_rejection = any(s in text_full for s in _STRONG_REJECTION_SIGNALS)
+    rejection_in_subject = any(s in subject_lower for s in _REJECTION_SIGNALS)
+    weak_rejection_hits = sum(1 for s in _WEAK_REJECTION_SIGNALS if s in text_full)
+    if strong_rejection or rejection_in_subject or weak_rejection_hits >= 2:
         return "rejection"
 
-    # Offer (more specific than interview — check first)
+    # Offer requires 1+ specific hit (offer signals are quite specific)
     if offer_hits >= 1:
         return "offer"
 
-    # Interview
+    # Interview requires 1+ hit (most interview signals are fairly specific)
     if interview_hits >= 1:
         return "interview"
 
-    # Automated confirmation (no human action needed)
+    # Automated confirmation
     if confirmation_hits >= 1:
         return "confirmation"
 
@@ -209,12 +234,16 @@ class GmailInbox:
         references: str,
     ) -> None:
         """Send a reply email via SMTP. Blocking — run via asyncio.to_thread()."""
+        domain = self._address.split("@")[-1] if "@" in self._address else "mail.local"
+        own_message_id = f"<{uuid.uuid4().hex}@{domain}>"
+
         msg = MIMEMultipart("alternative")
         msg["From"] = self._address
         msg["To"] = to_address
         msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+        msg["Message-ID"] = own_message_id
         msg["In-Reply-To"] = in_reply_to
-        msg["References"] = references
+        msg["References"] = f"{references} {own_message_id}".strip()
         msg.attach(MIMEText(body, "plain"))
 
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
