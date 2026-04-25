@@ -174,8 +174,11 @@ If exit 0: tell the user:
 > - `/queue` — view pending discovered jobs, reply with numbers (e.g. "1,3") or "all" to investigate
 > - `/report` — pipeline stats (today/week/all-time) + queue size + top companies
 >
-> **Profile and history:**
+> **Profile, branding & history:**
 > - `/profile` — run achievement interview to update profile
+> - `/linkedin [url]` — audit LinkedIn profile (scored feedback per section)
+> - `/website [minimal|dark|academic]` — generate a GitHub Pages portfolio
+> - `/website guide` — step-by-step deploy instructions
 > - `/resume <id>` — retrieve tailored resume for a past application
 > - `/coverletter <id>` — retrieve cover letter for a past application
 > - `/status` — see how many applications you've sent
@@ -225,8 +228,11 @@ and Y/N prompts in sequence. "skip all" clears the queue.
 - `/prefs dailycap <n>` — max applications per day
 - `/prefs show` — display all current preferences
 
-**Profile and history:**
+**Profile, branding & history:**
 - `/profile` — run achievement interview to refresh profile
+- `/linkedin [url]` — audit your LinkedIn profile with scored section-by-section feedback
+- `/website [minimal|dark|academic]` — generate a self-contained GitHub Pages portfolio HTML file
+- `/website guide` — step-by-step instructions for deploying to GitHub Pages
 - `/resume <id>` — retrieve tailored resume for a past application
 - `/coverletter <id>` — retrieve cover letter for a past application
 - `/status` — total application count

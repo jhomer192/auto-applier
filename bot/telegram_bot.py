@@ -106,6 +106,8 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("prefs", cmd_prefs))
         app.add_handler(CommandHandler("queue", cmd_queue))
         app.add_handler(CommandHandler("report", cmd_report))
+        app.add_handler(CommandHandler("linkedin", cmd_linkedin))
+        app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -143,9 +145,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/search add <query> [location] \u2014 save a search\n"
         "/search list \u2014 list saved searches\n"
         "/search rm <id> \u2014 remove a search\n\n"
-        "Profile commands:\n"
+        "Profile & branding commands:\n"
         "/profile \u2014 add achievements to your profile\n"
-        "/prefs \u2014 view/set job preferences (salary, roles, auto-apply)\n\n"
+        "/prefs \u2014 view/set job preferences (salary, roles, auto-apply)\n"
+        "/linkedin [url] \u2014 audit your LinkedIn profile (scored feedback)\n"
+        "/website [minimal|dark|academic] \u2014 generate a GitHub Pages portfolio\n"
+        "/website guide \u2014 step-by-step deploy instructions\n\n"
         "/help \u2014 this message"
     )
 
@@ -1534,3 +1539,150 @@ async def _submit_application(
         )
 
     await _maybe_process_next_batch_item(update, context)
+
+
+# ---------------------------------------------------------------------------
+# /linkedin — audit the user's LinkedIn profile
+# ---------------------------------------------------------------------------
+
+
+async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Audit the user's LinkedIn profile and give scored feedback.
+
+    /linkedin [<profile_url>]
+      - If a URL is provided it's used directly.
+      - Otherwise falls back to profile.yaml links.linkedin.
+      - Requires LinkedIn auth state (data/linkedin_auth.json).
+    """
+    if not _auth(update, context):
+        return
+
+    profile: dict = context.bot_data["profile"]
+    args = context.args or []
+
+    # Resolve the profile URL
+    profile_url = args[0].strip() if args else ""
+    if not profile_url:
+        profile_url = (profile.get("links") or {}).get("linkedin", "")
+    if not profile_url:
+        await update.message.reply_text(
+            "No LinkedIn URL found.\n\n"
+            "Usage: /linkedin <your_profile_url>\n"
+            "Or add your URL to profile.yaml under links.linkedin and run /linkedin."
+        )
+        return
+
+    if "linkedin.com/in/" not in profile_url and "linkedin.com/pub/" not in profile_url:
+        await update.message.reply_text(
+            "That doesn't look like a LinkedIn profile URL.\n"
+            "Expected: linkedin.com/in/<username>"
+        )
+        return
+
+    await update.message.reply_text(
+        "Fetching your LinkedIn profile and running the audit...\n"
+        "(This takes ~20 seconds)"
+    )
+
+    auth_state = "data/linkedin_auth.json"
+
+    try:
+        from bot.linkedin_audit import run_linkedin_audit, format_audit_report
+        report = await run_linkedin_audit(profile_url, profile, auth_state)
+    except Exception as e:
+        logger.error("linkedin audit failed: %s", e)
+        await update.message.reply_text(
+            f"Audit failed: {e}\n\n"
+            "Make sure you've run the LinkedIn login setup:\n"
+            "  DISPLAY=:0 .venv/bin/python setup/linkedin_login.py"
+        )
+        return
+
+    formatted = format_audit_report(report)
+    await update.message.reply_text(formatted, parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
+# /website — generate a GitHub Pages personal site
+# ---------------------------------------------------------------------------
+
+
+async def cmd_website(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a personal website from your profile and send deploy instructions.
+
+    /website [theme]   — theme: minimal (default) | dark | academic
+    /website guide     — show deployment instructions only (no file generated)
+    """
+    if not _auth(update, context):
+        return
+
+    profile: dict = context.bot_data["profile"]
+    args = context.args or []
+
+    # /website guide — deployment instructions only
+    if args and args[0].lower() == "guide":
+        from bot.website import deployment_guide
+        guide = deployment_guide(profile)
+        await update.message.reply_text(guide)
+        return
+
+    # Resolve theme
+    valid_themes = {"minimal", "dark", "academic"}
+    theme = "minimal"
+    if args and args[0].lower() in valid_themes:
+        theme = args[0].lower()
+    elif args and args[0].lower() not in ("guide",):
+        await update.message.reply_text(
+            "Unknown theme. Available themes: minimal, dark, academic\n\n"
+            "Usage:\n"
+            "/website           — generate with minimal theme\n"
+            "/website dark      — dark theme (great for engineers)\n"
+            "/website academic  — academic/research theme\n"
+            "/website guide     — deployment instructions only"
+        )
+        return
+
+    await update.message.reply_text(f"Generating your {theme} site...")
+
+    from bot.website import generate_website, deployment_guide
+    import tempfile, os
+
+    html_content = generate_website(profile, theme=theme)
+
+    # Write to a temp file and send as document
+    name_slug = (profile.get("name") or "portfolio").lower().replace(" ", "-")
+    filename = f"{name_slug}-site.html"
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".html", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(html_content)
+        tmp_path = f.name
+
+    try:
+        with open(tmp_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=filename,
+                caption=(
+                    f"Your {theme} portfolio site — {len(html_content):,} bytes.\n\n"
+                    "Self-contained: no build tools needed.\n"
+                    "Use /website guide for deploy steps."
+                ),
+            )
+    except Exception as e:
+        logger.error("website: failed to send file: %s", e)
+        await update.message.reply_text(
+            f"Could not send the file: {e}\n"
+            f"The file was written to: {tmp_path}"
+        )
+        return
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    # Follow up with the guide
+    guide = deployment_guide(profile)
+    await update.message.reply_text(guide)
