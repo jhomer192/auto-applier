@@ -6,3 +6,5 @@ __pycache__/
 *.db
 *.json
 !.env.example
+# User's personal profile — contains PII (name, phone, email, work history)
+profile.yaml

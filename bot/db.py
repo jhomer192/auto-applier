@@ -1,4 +1,5 @@
 import aiosqlite
+from pathlib import Path
 from bot.models import ApplicationRecord, EmailThread, SavedSearch
 
 CREATE_TABLE = """
@@ -65,6 +66,8 @@ class ApplicationDB:
         self._path = db_path
 
     async def init(self) -> None:
+        # Ensure the directory exists before aiosqlite tries to create the file
+        Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self._path) as db:
             await db.execute(CREATE_TABLE)
             await db.execute(CREATE_IDX_STATUS)

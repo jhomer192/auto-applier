@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run by Claude Code during first-time setup. Writes profile.yaml."""
+import getpass
 import yaml
 from pathlib import Path
 
@@ -249,7 +250,7 @@ def _setup_gmail_env() -> None:
     print("(Requires 2-Step Verification to be enabled.)")
     print("")
     gmail_address = input("Gmail address: ").strip()
-    gmail_password = input("App Password (16-char, spaces ok): ").strip().replace(" ", "")
+    gmail_password = getpass.getpass("App Password (16-char, spaces ok — hidden): ").strip().replace(" ", "")
 
     if not gmail_address or not gmail_password:
         print("Skipping Gmail setup — incomplete input.")
