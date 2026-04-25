@@ -9,6 +9,7 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
 from bot.profile import load_profile, ProfileError
+from bot.auto_apply import ensure_auto_searches, process_queued_jobs
 from bot.telegram_bot import AutoApplierBot, notify_new_emails, notify_search_matches
 
 logging.basicConfig(
@@ -39,11 +40,24 @@ async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:
 
 
 async def _search_poll_loop(app, linkedin_auth: str) -> None:
-    """Background task: check saved job searches every SEARCH_POLL_INTERVAL seconds."""
+    """Background task: seed searches, find new jobs, auto-apply — every SEARCH_POLL_INTERVAL seconds."""
     logger.info("Search poller started (every %ds)", SEARCH_POLL_INTERVAL)
     while True:
         try:
+            db: ApplicationDB = app.bot_data["db"]
+            profile: dict = app.bot_data["profile"]
+
+            # 1. Auto-seed searches from desired_roles (no-op if already exist or auto_search=False)
+            new_searches = await ensure_auto_searches(db, profile)
+            if new_searches:
+                logger.info("Auto-seeded %d new saved searches from desired_roles", new_searches)
+
+            # 2. Run all active searches, queue new matches
             await notify_search_matches(app, linkedin_auth)
+
+            # 3. Process the queue: auto-apply where threshold is met, batch the rest
+            await process_queued_jobs(app, linkedin_auth)
+
         except asyncio.CancelledError:
             break
         except Exception as e:

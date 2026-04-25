@@ -145,9 +145,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/search add <query> [location] \u2014 save a search\n"
         "/search list \u2014 list saved searches\n"
         "/search rm <id> \u2014 remove a search\n\n"
+        "Autonomous mode:\n"
+        "/prefs roles SWE,Backend Engineer \u2014 set target roles (bot searches these)\n"
+        "/prefs autoapply 80 \u2014 auto-submit jobs scoring \u2265 80 (0 = always ask)\n"
+        "/prefs autosearch on|off \u2014 auto-generate searches from desired roles\n\n"
         "Profile & branding commands:\n"
         "/profile \u2014 add achievements to your profile\n"
-        "/prefs \u2014 view/set job preferences (salary, roles, auto-apply)\n"
+        "/prefs \u2014 view/set all preferences\n"
         "/linkedin [url] \u2014 audit your LinkedIn profile (scored feedback)\n"
         "/website [minimal|dark|academic] \u2014 generate a GitHub Pages portfolio\n"
         "/website guide \u2014 step-by-step deploy instructions\n\n"
@@ -459,6 +463,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     /prefs exclude <company>     — add company to exclusion list
     /prefs unexclude <company>   — remove from exclusion list
     /prefs sponsorship yes|no    — toggle visa sponsorship requirement
+    /prefs autosearch on|off     — auto-generate searches from desired_roles
     """
     if not _auth(update, context):
         return
@@ -480,8 +485,10 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         gap = f"{prefs.min_apply_gap_minutes}–{prefs.max_apply_gap_minutes} min"
         cap = str(prefs.max_applies_per_day) if prefs.max_applies_per_day else "30 (default)"
         sponsorship = "yes (need sponsorship)" if prefs.requires_sponsorship else "no"
+        auto_search = "on" if prefs.auto_search else "off"
         await update.message.reply_text(
             "Current job preferences:\n\n"
+            f"Auto-search: {auto_search} (generates searches from desired roles)\n"
             f"Roles: {roles}\n"
             f"Min salary: {min_s}\n"
             f"Target salary: {target_s}\n"
@@ -494,6 +501,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"  Apply gap: {gap} (randomised)\n"
             f"  Daily cap: {cap} applications/day\n\n"
             "Update with:\n"
+            "/prefs autosearch on|off\n"
             "/prefs roles Backend Engineer,Staff Engineer\n"
             "/prefs salary 180000 220000\n"
             "/prefs seniority senior,staff,principal\n"
@@ -665,10 +673,29 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             await update.message.reply_text("Visa sponsorship requirement set to no.")
 
+    elif sub == "autosearch":
+        if len(args) < 2 or args[1].lower() not in ("on", "off"):
+            await update.message.reply_text("Usage: /prefs autosearch on|off")
+            return
+        prefs.auto_search = args[1].lower() == "on"
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        if prefs.auto_search:
+            roles = ", ".join(prefs.desired_roles) if prefs.desired_roles else "none set yet"
+            await update.message.reply_text(
+                f"Auto-search enabled.\n"
+                f"I'll create searches for your desired roles ({roles}) automatically.\n"
+                "Set roles with /prefs roles <role1,role2,...>"
+            )
+        else:
+            await update.message.reply_text(
+                "Auto-search disabled. Use /search add <query> to add searches manually."
+            )
+
     else:
         await update.message.reply_text(
             "Unknown subcommand. Options: roles, salary, seniority, arrangement, "
-            "autoapply, exclude, unexclude, pace, dailycap, sponsorship"
+            "autoapply, autosearch, exclude, unexclude, pace, dailycap, sponsorship"
         )
 
 

@@ -64,6 +64,7 @@ class JobPreferences:
     max_apply_gap_minutes: int = 8  # upper bound for randomised gap
     max_applies_per_day: int = 30   # daily application cap (0 = no cap)
     requires_sponsorship: bool = False  # True if candidate needs H-1B or similar visa sponsorship
+    auto_search: bool = True        # auto-generate searches from desired_roles (no manual /search add needed)
 
 
 @dataclass

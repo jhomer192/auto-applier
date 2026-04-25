@@ -206,23 +206,34 @@ letter preview. If `autoapply` is set and the score meets the threshold, it subm
 without waiting. If the company is on the exclude list or salary is far below the floor,
 it hard-passes automatically.
 
-**Passive job discovery:**
-The bot polls saved searches every 30 minutes. New matches go into a review queue instead
-of spamming you one at a time. When new jobs arrive you get a single numbered list. Reply
-with numbers (e.g. "1,3") or "all" to investigate those jobs — the bot runs full analysis
-and Y/N prompts in sequence. "skip all" clears the queue.
-- `/search add <query> [in <location>]` — add a saved search
+**Autonomous mode (set-and-forget):**
+Set your desired roles and an auto-apply threshold and the bot handles everything:
+1. Auto-generates LinkedIn searches from your desired roles (no `/search add` needed)
+2. Every 30 minutes it polls for new matches and queues them
+3. For each queued job: fetches the posting, scores the fit with Claude, fills the form
+4. Jobs scoring ≥ threshold with all fields answerable from profile → submitted automatically, sends you a notification
+5. Everything else → sent as a numbered batch review message for your Y/N
+
+To enable:
+```
+/prefs roles Software Engineer,Backend Engineer
+/prefs autoapply 80
+/prefs autosearch on
+```
+
+- `/search add <query> [in <location>]` — add a manual saved search
 - `/search list` — show active searches
 - `/search rm <id>` — pause a search
 - `/queue` — show pending jobs in the queue right now
 - `/report` — pipeline stats (today/week/all-time), queue size, top companies
 
 **Preferences:**
-- `/prefs roles <role1>, <role2>` — desired job titles
+- `/prefs autosearch on|off` — auto-generate searches from desired roles (default: on)
+- `/prefs roles <role1>, <role2>` — desired job titles (drives auto-search)
+- `/prefs autoapply <score>` — auto-apply threshold; 0 = always ask Y/N
 - `/prefs salary <min> [target <t>]` — salary floor and optional target
 - `/prefs seniority <level>` — seniority level preference
 - `/prefs arrangement <remote|hybrid|onsite>` — work arrangement preference
-- `/prefs autoapply <score>` — auto-apply threshold; 0 = disabled
 - `/prefs exclude <company>` / `/prefs unexclude <company>` — manage hard-pass list
 - `/prefs pace <min> <max>` — min/max gap in minutes between applications
 - `/prefs dailycap <n>` — max applications per day

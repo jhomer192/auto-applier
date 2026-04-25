@@ -72,6 +72,9 @@ def load_preferences(profile: dict) -> JobPreferences:
     requires_sponsorship_raw = raw.get("requires_sponsorship", False)
     requires_sponsorship = bool(requires_sponsorship_raw) if requires_sponsorship_raw is not None else False
 
+    auto_search_raw = raw.get("auto_search", True)
+    auto_search = bool(auto_search_raw) if auto_search_raw is not None else True
+
     return JobPreferences(
         desired_roles=_strlist("desired_roles"),
         min_salary=_int("min_salary"),
@@ -84,6 +87,7 @@ def load_preferences(profile: dict) -> JobPreferences:
         max_apply_gap_minutes=_int("max_apply_gap_minutes") or 8,
         max_applies_per_day=_int("max_applies_per_day") or 30,
         requires_sponsorship=requires_sponsorship,
+        auto_search=auto_search,
     )
 
 
