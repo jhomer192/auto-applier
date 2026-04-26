@@ -19,7 +19,8 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
-from bot.llm import analyze_job, claude_call, draft_outreach_message, extract_achievements, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
+from bot.llm import analyze_job, claude_call, draft_outreach_message, extract_achievements, extract_voice_profile, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
+from bot.voice import load_voice_profile, save_voice_profile, voice_profile_summary
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.referral_radar import find_referral_candidates
 from bot.profile import load_preferences, save_preferences
@@ -36,6 +37,9 @@ AWAITING_EMAIL_REPLY = "awaiting_email_reply"  # value: EmailThread
 # Profile interview state
 PROFILE_INTERVIEW = "profile_interview"   # value: {"step": int, "answers": [(q, a), ...]}
 
+# Voice fingerprinting interview state
+VOICE_INTERVIEW = "VOICE_INTERVIEW"   # value: {"step": int, "samples": [str, ...]}
+
 # Passive job discovery batch state (bot_data — set by background task)
 PENDING_BATCH = "pending_batch"   # list[QueuedJob] shown to user awaiting number reply
 BATCH_QUEUE = "batch_queue"       # list[QueuedJob] selected by user, awaiting sequential processing
@@ -46,6 +50,12 @@ _PROFILE_QUESTIONS = [
     "Any notable technical accomplishments? Systems you built or scaled, hard bugs you solved, tools others adopted?",
     "What would a past manager say is your standout quality? Any specific situations that back that up?",
     "Anything else worth capturing — side projects with traction, open source contributions, awards, things you're proud of that aren't on your resume yet?",
+]
+
+VOICE_PROMPTS = [
+    "Tell me about a project you're proud of. Write it in your own words, like you'd explain it to a friend. (2-4 sentences)",
+    "Describe why you want to work in your target industry. Be genuine — this is just for calibration, it won't be sent anywhere. (2-4 sentences)",
+    "What's something you've learned recently that excited you? (2-4 sentences)",
 ]
 
 SUPPORTED_PATTERNS = [
@@ -107,6 +117,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("resume", cmd_resume))
         app.add_handler(CommandHandler("coverletter", cmd_coverletter))
         app.add_handler(CommandHandler("profile", cmd_profile))
+        app.add_handler(CommandHandler("voice", cmd_voice))
         app.add_handler(CommandHandler("prefs", cmd_prefs))
         app.add_handler(CommandHandler("queue", cmd_queue))
         app.add_handler(CommandHandler("report", cmd_report))
@@ -216,6 +227,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         "── Profile & branding ──\n"
         "/profile \u2014 add achievements to your profile\n"
+        "/voice \u2014 calibrate writing style so cover letters sound like you\n"
         "/linkedin [url] \u2014 audit your LinkedIn (scored section-by-section feedback)\n"
         "/website [minimal|dark|academic] \u2014 generate a GitHub Pages portfolio\n"
         "/website guide \u2014 deploy instructions\n\n"
@@ -318,6 +330,10 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         context.user_data.pop(PROFILE_INTERVIEW, None)
         await update.message.reply_text("Profile interview cancelled. Nothing was saved.")
 
+    elif context.user_data.get(VOICE_INTERVIEW):
+        context.user_data.pop(VOICE_INTERVIEW, None)
+        await update.message.reply_text("Voice calibration cancelled. Nothing was saved.")
+
     else:
         await update.message.reply_text("Nothing to cancel.")
 
@@ -405,12 +421,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _handle_email_reply(update, context, text)
         return
 
-    # Case 1b: profile interview in progress
+    # Case 1b: voice fingerprinting interview in progress
+    if context.user_data.get(VOICE_INTERVIEW):
+        await _handle_voice_answer(update, context, text)
+        return
+
+    # Case 1c: profile interview in progress
     if context.user_data.get(PROFILE_INTERVIEW):
         await _handle_profile_answer(update, context, text)
         return
 
-    # Case 1c: we are waiting for a field answer from the user
+    # Case 1d: we are waiting for a field answer from the user
     if context.user_data.get(AWAITING_FIELD):
         await _handle_field_answer(update, context, text)
         return
@@ -832,6 +853,121 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start voice fingerprinting or show/reset the current voice profile.
+
+    /voice        — start the interview (or show status if profile exists)
+    /voice reset  — clear existing profile and restart
+    """
+    if not _auth(update, context):
+        return
+
+    args = context.args or []
+    is_reset = args and args[0].lower() == "reset"
+
+    existing = load_voice_profile()
+
+    if is_reset:
+        import os as _os
+        from bot.voice import get_voice_profile_path
+        vp_path = get_voice_profile_path()
+        try:
+            _os.remove(vp_path)
+        except FileNotFoundError:
+            pass
+        context.user_data.pop(VOICE_INTERVIEW, None)
+        await update.message.reply_text(
+            "Voice profile cleared. Starting fresh calibration.\n\n"
+            f"*Question 1 of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[0]}",
+            parse_mode="Markdown",
+        )
+        context.user_data[VOICE_INTERVIEW] = {"step": 0, "samples": []}
+        return
+
+    if existing and not is_reset:
+        summary = voice_profile_summary(existing)
+        await update.message.reply_text(
+            "Voice profile already set:\n\n"
+            f"{summary}\n\n"
+            "Use /voice reset to redo the calibration."
+        )
+        return
+
+    if context.user_data.get(VOICE_INTERVIEW):
+        state = context.user_data[VOICE_INTERVIEW]
+        step = state["step"]
+        await update.message.reply_text(
+            f"Voice calibration already in progress. Answer question {step + 1} above, "
+            "or /cancel to quit."
+        )
+        return
+
+    context.user_data[VOICE_INTERVIEW] = {"step": 0, "samples": []}
+    await update.message.reply_text(
+        "Let's calibrate your writing style. I'll ask 3 short questions — write naturally, "
+        "like you're texting a friend. The answers stay local and are only used to "
+        "make your cover letters sound like you.\n\n"
+        f"*Question 1 of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[0]}",
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_voice_answer(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    """Process one answer in the voice fingerprinting interview.
+
+    Args:
+        update: Telegram Update.
+        context: Handler context.
+        text: The user's answer text.
+    """
+    state: dict = context.user_data[VOICE_INTERVIEW]
+    step: int = state["step"]
+    samples: list = state["samples"]
+
+    samples.append(text)
+    step += 1
+    state["step"] = step
+    state["samples"] = samples
+
+    if step < len(VOICE_PROMPTS):
+        await update.message.reply_text(
+            f"*Question {step + 1} of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[step]}",
+            parse_mode="Markdown",
+        )
+        return
+
+    # All samples collected — extract and save
+    context.user_data.pop(VOICE_INTERVIEW, None)
+    await update.message.reply_text("Analyzing your writing style...")
+
+    try:
+        vp = await extract_voice_profile(samples)
+    except LLMError as e:
+        await update.message.reply_text(f"Could not extract voice profile: {e}")
+        return
+
+    from datetime import datetime as _dt, timezone as _tz
+    vp["samples_collected"] = len(samples)
+    vp["created_at"] = _dt.now(_tz.utc).isoformat(timespec="seconds")
+
+    try:
+        save_voice_profile(vp)
+    except Exception as e:
+        await update.message.reply_text(f"Could not save voice profile: {e}")
+        return
+
+    summary = voice_profile_summary(vp)
+    await update.message.reply_text(
+        "Voice profile saved. Future cover letters and field answers will match your style.\n\n"
+        f"{summary}\n\n"
+        "Use /voice reset to redo calibration."
+    )
+
+
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start an achievement-mining interview to enrich the candidate profile."""
     if not _auth(update, context):
@@ -1008,6 +1144,9 @@ async def _handle_job_url(
         await update.message.reply_text(f"Auto-skipped: {fit.hard_pass_reason}")
         return
 
+    # Load voice profile once for all LLM calls in this flow
+    voice_profile = load_voice_profile()
+
     # Generate tailored materials
     tailored_resume_text = ""
     cover_letter_text = ""
@@ -1016,7 +1155,7 @@ async def _handle_job_url(
     except LLMError as e:
         logger.warning("tailor_resume failed: %s", e)
     try:
-        cover_letter_text = await generate_cover_letter(job_analysis, profile)
+        cover_letter_text = await generate_cover_letter(job_analysis, profile, voice_profile=voice_profile)
     except LLMError as e:
         logger.warning("generate_cover_letter failed: %s", e)
 
@@ -1032,6 +1171,7 @@ async def _handle_job_url(
             answer = await generate_field_answer(
                 form_field.label, f"Job: {job_info.title}", profile, job_analysis,
                 field_hint=hint,
+                voice_profile=voice_profile,
             )
             if answer.startswith("NEEDS_USER_INPUT:"):
                 needs_user_input.append(i)

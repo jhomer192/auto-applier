@@ -9,6 +9,7 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
 from bot.profile import load_profile, load_preferences, ProfileError
+from bot.voice import load_voice_profile
 from bot.auto_apply import ensure_auto_searches, process_queued_jobs
 from bot.scam_detector import check_scam
 from bot.sources import ALL_SOURCES
@@ -183,6 +184,9 @@ def main() -> None:
     )
 
     async def _post_init(application) -> None:
+        # Pre-load voice profile into bot_data so handlers don't re-read the file each call
+        application.bot_data["voice_profile"] = load_voice_profile()
+
         if gmail_inbox:
             application.create_task(_inbox_poll_loop(application, gmail_inbox))
         # Always start the search poller (it no-ops when there are no saved searches)

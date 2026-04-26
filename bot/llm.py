@@ -237,12 +237,91 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
     return JobAnalysis(**data)
 
 
+async def extract_voice_profile(samples: list[str]) -> dict:
+    """Analyze writing samples and extract voice and style markers.
+
+    Args:
+        samples: List of writing sample strings from the user.
+
+    Returns:
+        Voice profile dict with keys: tone, vocabulary_level, avg_sentence_length,
+        uses_contractions, uses_first_person, quirks, avoid_phrases.
+    """
+    numbered = "\n\n".join(f"Sample {i + 1}:\n{s}" for i, s in enumerate(samples))
+    prompt = (
+        "You are a writing-style analyst. Read the writing samples below and extract a "
+        "precise voice profile. Be specific — generic descriptions like 'clear writing' "
+        "are not useful.\n\n"
+        f"WRITING SAMPLES:\n{numbered}\n\n"
+        "Return ONLY a valid YAML block with exactly these keys:\n"
+        "tone: <e.g. 'direct and confident', 'warm but professional', 'casual and energetic'>\n"
+        "vocabulary_level: <one of: casual | professional | technical>\n"
+        "avg_sentence_length: <one of: short | medium | long>\n"
+        "uses_contractions: <true or false>\n"
+        "uses_first_person: <true or false>\n"
+        "quirks:\n"
+        "  - <specific stylistic trait, e.g. 'opens with a strong action verb'>\n"
+        "  - <up to 5 traits total>\n"
+        "avoid_phrases:\n"
+        "  - <phrase that would sound unnatural for this writer>\n"
+        "  - <up to 5 phrases total>\n\n"
+        "Output ONLY the YAML block, no explanation, no code fences."
+    )
+    raw = await claude_call(prompt)
+    # Strip code fences if Claude wraps output anyway
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("```", 2)[1]
+        if stripped.startswith("yaml"):
+            stripped = stripped[4:]
+        stripped = stripped.rsplit("```", 1)[0].strip()
+    parsed = yaml.safe_load(stripped)
+    if not isinstance(parsed, dict):
+        raise LLMError(f"extract_voice_profile: unexpected output format: {raw[:200]}")
+    return parsed
+
+
+def _build_voice_block(voice_profile: dict) -> str:
+    """Format a voice profile dict into a prompt injection block.
+
+    Args:
+        voice_profile: Voice profile dict from extract_voice_profile or load_voice_profile.
+
+    Returns:
+        Formatted string to inject into LLM prompts.
+    """
+    quirks = voice_profile.get("quirks") or []
+    avoid = voice_profile.get("avoid_phrases") or []
+
+    lines = [
+        "\nVOICE PROFILE — Match this writing style exactly:",
+        f"  Tone: {voice_profile.get('tone', 'not specified')}",
+        f"  Vocabulary level: {voice_profile.get('vocabulary_level', 'not specified')}",
+        f"  Sentence length: {voice_profile.get('avg_sentence_length', 'not specified')}",
+        f"  Uses contractions: {voice_profile.get('uses_contractions', 'unknown')}",
+        f"  First-person voice: {voice_profile.get('uses_first_person', 'unknown')}",
+    ]
+    if quirks:
+        lines.append("  Style markers:")
+        for q in quirks:
+            lines.append(f"    - {q}")
+    if avoid:
+        lines.append("  Avoid these phrases (they sound unnatural for this writer):")
+        for p in avoid:
+            lines.append(f"    - {p}")
+    lines.append(
+        "  Reproduce these exact patterns — do not default to generic professional prose.\n"
+    )
+    return "\n".join(lines)
+
+
 async def generate_field_answer(
     field_label: str,
     field_context: str,
     profile: dict,
     job_analysis: JobAnalysis | None = None,
     field_hint: str | None = None,
+    voice_profile: dict | None = None,
 ) -> str:
     """Generate an answer for a single form field using the candidate profile.
 
@@ -277,6 +356,7 @@ async def generate_field_answer(
             field_role_hint = f"\nROLE-SPECIFIC GUIDANCE: {role_hint}\n"
 
     hint_block = f"\nFIELD GUIDANCE: {field_hint}\n" if field_hint else ""
+    voice_block = _build_voice_block(voice_profile) if voice_profile else ""
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n"
@@ -284,6 +364,7 @@ async def generate_field_answer(
         f"{field_role_hint}"
         f"{hint_block}\n"
         f"PROFILE:\n{profile_str}\n\n"
+        f"{voice_block}"
         f"FORM FIELD: {field_label}\n"
         f"CONTEXT (surrounding form text): {field_context}\n\n"
         "Provide the best answer for this field using only information from the profile above.\n"
@@ -642,18 +723,26 @@ async def draft_outreach_message(
     return await claude_call(prompt)
 
 
-async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str:
+async def generate_cover_letter(
+    job_analysis: JobAnalysis,
+    profile: dict,
+    voice_profile: dict | None = None,
+) -> str:
     """Generate a grounded, tailored cover letter. Never invents facts.
 
     The letter is structured to open by connecting a specific candidate experience
     to a specific job responsibility, weave in ATS keywords naturally, and close
     by referencing what makes this particular role distinctive. When the profile
     includes an academic section, research experience is explicitly bridged to the
-    industry role.
+    industry role. When a voice_profile is supplied, the letter is written to match
+    the candidate's personal writing style.
 
     Args:
         job_analysis: Expanded analysis of the job posting including tone and keywords.
         profile: Candidate profile dict.
+        voice_profile: Optional voice profile dict from extract_voice_profile.
+            When provided, style instructions are injected into the prompt.
+            Defaults to None (no style injection — backward-compatible).
 
     Returns:
         A cover letter string of at most 3 paragraphs.
@@ -663,6 +752,7 @@ async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str
     tailoring_context = _build_tailoring_context(job_analysis)
     academic_block = _build_academic_block(safe_profile)
     experience_context = _build_experience_context(safe_profile)
+    voice_block = _build_voice_block(voice_profile) if voice_profile else ""
 
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
@@ -670,6 +760,7 @@ async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str
         f"{academic_block}"
         f"{experience_context}"
         f"PROFILE:\n{profile_str}\n\n"
+        f"{voice_block}"
         "Write a cover letter for this role following these exact rules:\n"
         "1. Exactly 3 paragraphs — no more, no less.\n"
         "2. Opening paragraph: connect ONE specific piece of the candidate's experience directly\n"

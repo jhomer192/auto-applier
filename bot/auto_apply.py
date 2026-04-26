@@ -30,6 +30,7 @@ from bot.profile import load_preferences
 from bot.referral_radar import find_referral_candidates
 from bot.scraper import field_answer_hint
 from bot.telegram_bot import _build_batch_message, PENDING_BATCH
+from bot.voice import load_voice_profile
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
     screenshot_dir: str = app.bot_data.get("screenshot_dir", "data/screenshots")
 
     prefs = load_preferences(profile)
+    voice_profile = load_voice_profile()
 
     # Hard daily cap — safety rail against runaway auto-apply
     DAILY_CAP = 500
@@ -188,7 +190,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         except LLMError as e:
             logger.warning("auto_apply: tailor_resume failed: %s", e)
         try:
-            cover_letter = await generate_cover_letter(job_analysis, profile)
+            cover_letter = await generate_cover_letter(job_analysis, profile, voice_profile=voice_profile)
         except LLMError as e:
             logger.warning("auto_apply: generate_cover_letter failed: %s", e)
 
@@ -210,6 +212,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                 answer = await generate_field_answer(
                     form_field.label, f"Job: {job_info.title}", profile, job_analysis,
                     field_hint=hint,
+                    voice_profile=voice_profile,
                 )
                 if answer.startswith("NEEDS_USER_INPUT:"):
                     if form_field.required:
