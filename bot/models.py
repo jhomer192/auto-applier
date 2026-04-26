@@ -153,6 +153,9 @@ class QueuedJob:
     id: int | None = None
     queued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     status: str = "pending"  # "pending" | "dismissed" | "applied" | "skipped"
+    scam_score: int = 0
+    scam_flag: int = 0
+    scam_signals: str = ""  # pipe-separated list
 
 
 @dataclass

@@ -23,6 +23,7 @@ from bot.llm import analyze_job, claude_call, draft_outreach_message, extract_ac
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.referral_radar import find_referral_candidates
 from bot.profile import load_preferences, save_preferences
+from bot.scam_detector import check_scam
 from bot.scraper import field_answer_hint
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,9 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(CommandHandler("sources", cmd_sources))
         app.add_handler(CommandHandler("referrals", cmd_referrals))
+        app.add_handler(CommandHandler("scams", cmd_scams))
+        app.add_handler(CommandHandler("scam_apply", cmd_scam_apply))
+        app.add_handler(CommandHandler("force", cmd_force))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -197,6 +201,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/search list \u2014 list saved searches\n"
         "/search rm <id> \u2014 remove a search\n"
         "/queue \u2014 pending discovered jobs \u2014 reply with numbers (1,3) or all or skip all\n"
+        "/scams \u2014 view blocked/flagged job postings\n"
+        "/scam_apply <n> \u2014 approve nth flagged job for processing\n"
+        "/force <url> \u2014 process a URL that was blocked by scam detector\n"
         "/sources \u2014 show active discovery sources (GitHub repos, company boards)\n"
         "/report \u2014 stats (today / week / all-time) + queue size\n\n"
 
@@ -924,11 +931,40 @@ async def _handle_profile_answer(
         await update.message.reply_text(f"Failed to save profile: {e}")
 
 
-async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
-    """Handle a job URL: fetch, analyze, evaluate fit, generate materials, then show informed Y/N."""
+async def _handle_job_url(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    skip_scam_check: bool = False,
+) -> None:
+    """Handle a job URL: fetch, analyze, evaluate fit, generate materials, then show informed Y/N.
+
+    Args:
+        update: Telegram Update object.
+        context: Handler context.
+        url: Job posting URL.
+        skip_scam_check: When True, bypass the scam gate (used by /force command).
+    """
     registry: AdapterRegistry = context.bot_data["registry"]
     profile: dict = context.bot_data["profile"]
     db: ApplicationDB = context.bot_data["db"]
+
+    if not skip_scam_check:
+        scam = check_scam(url, title="", company="")
+        if scam.verdict == "rejected":
+            await update.message.reply_text(
+                f"Strong scam signals ({scam.score}/100):\n"
+                + "\n".join(f"• {s}" for s in scam.signals)
+                + f"\n\nBlocked. Send `/force {url}` to process it anyway."
+            )
+            return
+        if scam.verdict == "flagged":
+            signal_text = "\n".join(f"• {s}" for s in scam.signals)
+            await update.message.reply_text(
+                f"Warning: scam signals detected ({scam.score}/100):\n{signal_text}\n\n"
+                "Proceeding with analysis — use caution."
+            )
+
     adapter = registry.get(url)
 
     if not adapter:
@@ -1678,6 +1714,114 @@ async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lines.append("Use /queue to review, or set /prefs autoapply <score> for hands-free mode.")
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_scams(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show rejected and flagged scam postings.
+
+    /scams
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    week_ago = (now - timedelta(days=7)).isoformat()
+
+    rejected = await db.get_rejected_jobs(limit=50)
+    flagged = await db.get_flagged_queue()
+
+    recent_rejected = [r for r in rejected if r["rejected_at"] >= week_ago]
+
+    lines = [f"Scam Filter Summary\n"]
+    lines.append(f"Rejected (last 7 days): {len(recent_rejected)}")
+    lines.append(f"Flagged (pending review): {len(flagged)}\n")
+
+    if recent_rejected:
+        lines.append("-- Recently Rejected --")
+        for r in recent_rejected[:10]:
+            signals_preview = r["signals"].replace("|", ", ") if r["signals"] else "no signals"
+            lines.append(f"[{r['scam_score']}/100] {r['title']} @ {r['company']}")
+            lines.append(f"  Signals: {signals_preview}")
+            lines.append(f"  {r['url'][:80]}")
+
+    if flagged:
+        lines.append("\n-- Flagged Queue (use /scam_apply <n> to approve) --")
+        for i, job in enumerate(flagged, 1):
+            signals_preview = job.scam_signals.replace("|", ", ") if job.scam_signals else "no signals"
+            lines.append(f"{i}. [{job.scam_score}/100] {job.title} @ {job.company}")
+            lines.append(f"   Signals: {signals_preview}")
+
+    if not recent_rejected and not flagged:
+        lines.append("No scam-flagged or rejected jobs found.")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_scam_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Approve a flagged job for normal processing.
+
+    /scam_apply <n>  — move nth flagged job to clean queue
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+
+    if not context.args:
+        await update.message.reply_text("Usage: /scam_apply <n> — approve nth flagged job from /scams")
+        return
+
+    try:
+        index = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Please provide a number, e.g. /scam_apply 1")
+        return
+
+    flagged = await db.get_flagged_queue()
+    if not flagged:
+        await update.message.reply_text("No flagged jobs in queue.")
+        return
+
+    if index < 1 or index > len(flagged):
+        await update.message.reply_text(f"Index out of range. Use /scams to see the list (1–{len(flagged)}).")
+        return
+
+    job = flagged[index - 1]
+    await db.clear_scam_flag(job.id)
+    await update.message.reply_text(
+        f"Approved: {job.title} @ {job.company}\n"
+        f"Moved to normal queue — it will be processed next cycle."
+    )
+
+
+async def cmd_force(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process a URL that was blocked by the scam detector.
+
+    /force <url>
+    """
+    if not _auth(update, context):
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /force <url>")
+        return
+
+    url = context.args[0]
+    db: ApplicationDB = context.bot_data["db"]
+
+    # Verify the URL was actually rejected
+    rejected = await db.get_rejected_jobs(limit=200)
+    was_rejected = any(r["url"] == url for r in rejected)
+    if not was_rejected:
+        await update.message.reply_text(
+            "That URL was not found in the rejected list. "
+            "If it was just blocked as a direct message, send the URL directly and use /force if blocked."
+        )
+        return
+
+    await update.message.reply_text(f"Forcing processing of blocked URL...")
+    await _handle_job_url(update, context, url, skip_scam_check=True)
 
 
 async def _submit_application(

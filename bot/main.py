@@ -10,6 +10,7 @@ from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
 from bot.profile import load_profile, load_preferences, ProfileError
 from bot.auto_apply import ensure_auto_searches, process_queued_jobs
+from bot.scam_detector import check_scam
 from bot.sources import ALL_SOURCES
 from bot.telegram_bot import AutoApplierBot, notify_new_emails, notify_search_matches
 
@@ -91,6 +92,29 @@ async def _sources_poll_loop(app) -> None:
                     try:
                         async for job in source.discover(keywords):
                             if await db.is_job_seen(job.url):
+                                continue
+                            scam = check_scam(job.url, job.title, job.company)
+                            if scam.verdict == "rejected":
+                                await db.insert_rejected_job(
+                                    job.url, job.title, job.company,
+                                    scam.score, "|".join(scam.signals),
+                                )
+                                await db.mark_job_seen(job.url, None)
+                                logger.info(
+                                    "sources: scam-rejected %s (score=%d)", job.url, scam.score
+                                )
+                                continue
+                            elif scam.verdict == "flagged":
+                                added = await db.enqueue_job(
+                                    job.url, job.title, job.company,
+                                    scam_score=scam.score,
+                                    scam_flag=1,
+                                    scam_signals="|".join(scam.signals),
+                                )
+                                await db.mark_job_seen(job.url, None)
+                                if added:
+                                    source_new += 1
+                                    new_jobs += 1
                                 continue
                             added = await db.enqueue_job(job.url, job.title, job.company)
                             await db.mark_job_seen(job.url, None)

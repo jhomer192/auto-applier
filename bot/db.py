@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS job_queue (
 """
 CREATE_JOB_QUEUE_IDX = "CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status);"
 
+CREATE_REJECTED_JOBS_TABLE = """
+CREATE TABLE IF NOT EXISTS rejected_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL UNIQUE,
+    title       TEXT NOT NULL,
+    company     TEXT NOT NULL,
+    search_id   INTEGER,
+    scam_score  INTEGER NOT NULL DEFAULT 0,
+    signals     TEXT NOT NULL DEFAULT '',
+    rejected_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+CREATE_REJECTED_JOBS_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_rejected_jobs_at ON rejected_jobs(rejected_at);"
+)
+
 CREATE_REFERRAL_CANDIDATES_TABLE = """
 CREATE TABLE IF NOT EXISTS referral_candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +130,8 @@ class ApplicationDB:
             await db.execute(CREATE_JOB_QUEUE_IDX)
             await db.execute(CREATE_REFERRAL_CANDIDATES_TABLE)
             await db.execute(CREATE_REFERRAL_CANDIDATES_IDX)
+            await db.execute(CREATE_REJECTED_JOBS_TABLE)
+            await db.execute(CREATE_REJECTED_JOBS_IDX)
             # Migrate existing DBs: add new columns if missing
             for col, defn in [
                 ("cover_letter", "TEXT NOT NULL DEFAULT ''"),
@@ -123,6 +141,16 @@ class ApplicationDB:
                     await db.execute(f"ALTER TABLE applications ADD COLUMN {col} {defn}")
                 except Exception:
                     logger.debug("Migration: column %r already present, skipping", col)
+            # Scam detection columns on job_queue (idempotent migrations)
+            for col, typedef in [
+                ("scam_score", "INTEGER NOT NULL DEFAULT 0"),
+                ("scam_flag", "INTEGER NOT NULL DEFAULT 0"),
+                ("scam_signals", "TEXT NOT NULL DEFAULT ''"),
+            ]:
+                try:
+                    await db.execute(f"ALTER TABLE job_queue ADD COLUMN {col} {typedef}")
+                except Exception:
+                    pass  # column already exists
             await db.commit()
 
     async def insert_application(self, app: ApplicationRecord) -> int:
@@ -327,25 +355,115 @@ class ApplicationDB:
 
     # --- Job queue ---
 
-    async def enqueue_job(self, url: str, title: str, company: str, search_id: int | None = None) -> bool:
-        """Add a job to the review queue. Returns True if newly inserted, False if already present."""
+    async def enqueue_job(
+        self,
+        url: str,
+        title: str,
+        company: str,
+        search_id: int | None = None,
+        scam_score: int = 0,
+        scam_flag: int = 0,
+        scam_signals: str = "",
+    ) -> bool:
+        """Add a job to the review queue. Returns True if newly inserted, False if already present.
+
+        Args:
+            url: Job posting URL.
+            title: Job title.
+            company: Company name.
+            search_id: Associated saved search ID, if any.
+            scam_score: Heuristic scam confidence score (0-100).
+            scam_flag: 1 if job is suspected scam (score 40-79), else 0.
+            scam_signals: Pipe-separated list of triggered scam signal names.
+        """
         async with aiosqlite.connect(self._path) as db:
             cursor = await db.execute(
-                "INSERT OR IGNORE INTO job_queue (url, title, company, search_id) VALUES (?,?,?,?)",
-                (url, title, company, search_id),
+                """INSERT OR IGNORE INTO job_queue
+                   (url, title, company, search_id, scam_score, scam_flag, scam_signals)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (url, title, company, search_id, scam_score, scam_flag, scam_signals),
             )
             await db.commit()
             return cursor.rowcount > 0
 
     async def get_pending_queue(self) -> list["QueuedJob"]:
-        """Return all pending (un-reviewed) queued jobs, oldest first."""
+        """Return all pending (un-reviewed) queued jobs excluding scam-flagged, oldest first."""
         async with aiosqlite.connect(self._path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM job_queue WHERE status='pending' ORDER BY queued_at ASC"
+                "SELECT * FROM job_queue WHERE status='pending' AND scam_flag=0 ORDER BY queued_at ASC"
             )
             rows = await cursor.fetchall()
             return [_row_to_queued_job(row) for row in rows]
+
+    async def get_flagged_queue(self) -> list["QueuedJob"]:
+        """Return all pending jobs that are scam-flagged (score 40-79), oldest first."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM job_queue WHERE scam_flag=1 AND status='pending' ORDER BY queued_at ASC"
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_queued_job(row) for row in rows]
+
+    async def clear_scam_flag(self, job_id: int) -> None:
+        """Remove the scam flag from a queued job so it enters normal processing.
+
+        Args:
+            job_id: The job_queue row ID to un-flag.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "UPDATE job_queue SET scam_flag=0 WHERE id=?",
+                (job_id,),
+            )
+            await db.commit()
+
+    async def insert_rejected_job(
+        self,
+        url: str,
+        title: str,
+        company: str,
+        scam_score: int,
+        signals: str,
+        search_id: int | None = None,
+    ) -> None:
+        """Record a job that was rejected by the scam detector.
+
+        Args:
+            url: Job posting URL (unique key).
+            title: Job title.
+            company: Company name.
+            scam_score: Heuristic scam confidence score (0-100).
+            signals: Pipe-separated list of triggered signal names.
+            search_id: Associated saved search ID, if any.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """INSERT OR IGNORE INTO rejected_jobs
+                   (url, title, company, search_id, scam_score, signals)
+                   VALUES (?,?,?,?,?,?)""",
+                (url, title, company, search_id, scam_score, signals),
+            )
+            await db.commit()
+
+    async def get_rejected_jobs(self, limit: int = 50) -> list[dict]:
+        """Return the most recent rejected jobs, newest first.
+
+        Args:
+            limit: Maximum rows to return (bounded; no unbounded queries).
+
+        Returns:
+            List of dicts with keys: id, url, title, company, scam_score, signals, rejected_at.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM rejected_jobs ORDER BY rejected_at DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
     async def get_queue_count(self) -> int:
         """Return count of pending jobs in the queue."""
@@ -501,6 +619,7 @@ def _row_to_record(row: aiosqlite.Row) -> ApplicationRecord:
 
 
 def _row_to_queued_job(row: aiosqlite.Row) -> "QueuedJob":
+    keys = row.keys()
     return QueuedJob(
         id=row["id"],
         url=row["url"],
@@ -509,6 +628,9 @@ def _row_to_queued_job(row: aiosqlite.Row) -> "QueuedJob":
         search_id=row["search_id"],
         queued_at=row["queued_at"],
         status=row["status"],
+        scam_score=row["scam_score"] if "scam_score" in keys else 0,
+        scam_flag=row["scam_flag"] if "scam_flag" in keys else 0,
+        scam_signals=row["scam_signals"] if "scam_signals" in keys else "",
     )
 
 
