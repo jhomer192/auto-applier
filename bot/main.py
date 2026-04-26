@@ -187,6 +187,11 @@ def main() -> None:
         # Pre-load voice profile into bot_data so handlers don't re-read the file each call
         application.bot_data["voice_profile"] = load_voice_profile()
 
+        # Store HandshakeSource reference so /handshake command can read session state
+        from bot.sources.handshake import HandshakeSource
+        handshake_src = next((s for s in ALL_SOURCES if isinstance(s, HandshakeSource)), None)
+        application.bot_data["handshake_source"] = handshake_src
+
         if gmail_inbox:
             application.create_task(_inbox_poll_loop(application, gmail_inbox))
         # Always start the search poller (it no-ops when there are no saved searches)

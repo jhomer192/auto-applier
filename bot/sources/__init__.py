@@ -8,16 +8,19 @@ Sources:
   github_newgrad  — parse community-maintained GitHub new-grad job repos
   company_pages   — poll Greenhouse/Lever JSON APIs for curated companies
   github_orgs     — discover hiring companies via GitHub org metadata (needs GITHUB_TOKEN)
+  handshake       — campus/new-grad roles via Handshake GraphQL (needs login session)
 """
 from bot.sources.base import DiscoveredJob, Source
 from bot.sources.github_newgrad import GitHubNewGradSource
 from bot.sources.company_pages import CompanyPagesSource
 from bot.sources.github_orgs import GitHubOrgsSource
+from bot.sources.handshake import HandshakeSource
 
 ALL_SOURCES: list[Source] = [
     GitHubNewGradSource(),
     CompanyPagesSource(),
     GitHubOrgsSource(),
+    HandshakeSource(),
 ]
 
 SOURCE_MAP: dict[str, Source] = {s.name: s for s in ALL_SOURCES}

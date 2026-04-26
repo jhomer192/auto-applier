@@ -124,6 +124,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("linkedin", cmd_linkedin))
         app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(CommandHandler("sources", cmd_sources))
+        app.add_handler(CommandHandler("handshake", cmd_handshake))
         app.add_handler(CommandHandler("referrals", cmd_referrals))
         app.add_handler(CommandHandler("scams", cmd_scams))
         app.add_handler(CommandHandler("scam_apply", cmd_scam_apply))
@@ -216,6 +217,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/scam_apply <n> \u2014 approve nth flagged job for processing\n"
         "/force <url> \u2014 process a URL that was blocked by scam detector\n"
         "/sources \u2014 show active discovery sources (GitHub repos, company boards)\n"
+        "/handshake \u2014 Handshake connection status and setup\n"
         "/report \u2014 stats (today / week / all-time) + queue size\n\n"
 
         "── Application history ──\n"
@@ -1849,11 +1851,63 @@ async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 else "   Set GITHUB_TOKEN in .env to enable"
             )
             lines.append(f"{status}\n{note}")
+        elif source.name == "handshake":
+            from bot.sources.handshake import HandshakeSource
+            from pathlib import Path as _Path
+            hs: HandshakeSource | None = context.bot_data.get("handshake_source")
+            hs_auth = os.getenv("HANDSHAKE_AUTH_STATE", "data/handshake_auth.json")
+            if hs and hs._session_expired:
+                hs_status = "⚠️ Handshake — session expired"
+                hs_note = "   Re-authenticate: DISPLAY=:0 python setup/handshake_login.py"
+            elif _Path(hs_auth).exists():
+                hs_status = "✅ Handshake — connected"
+                hs_note = "   Campus/new-grad roles via Handshake GraphQL"
+            else:
+                hs_status = "❌ Handshake — not connected"
+                hs_note = "   Run: DISPLAY=:0 python setup/handshake_login.py"
+            lines.append(f"{hs_status}\n{hs_note}")
 
     lines.append(f"\nPolls every {minutes} min. Jobs matching your desired roles are queued automatically.")
     lines.append("Use /queue to review, or set /prefs autoapply <score> for hands-free mode.")
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_handshake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Handshake connection status and setup instructions.
+
+    /handshake
+    """
+    if not _auth(update, context):
+        return
+
+    from bot.sources.handshake import HandshakeSource
+    from pathlib import Path as _Path
+
+    hs: HandshakeSource | None = context.bot_data.get("handshake_source")
+    hs_auth = os.getenv("HANDSHAKE_AUTH_STATE", "data/handshake_auth.json")
+
+    if hs and hs._session_expired:
+        await update.message.reply_text(
+            "Handshake — session expired\n\n"
+            "Re-authenticate: DISPLAY=:0 python setup/handshake_login.py"
+        )
+    elif _Path(hs_auth).exists():
+        await update.message.reply_text(
+            "Handshake — connected\n\n"
+            "Poll interval: every hour\n"
+            "Use /queue to review discovered jobs.\n\n"
+            "To re-authenticate: DISPLAY=:0 python setup/handshake_login.py"
+        )
+    else:
+        await update.message.reply_text(
+            "Handshake — not connected\n\n"
+            "To connect:\n"
+            "1. On the VPS, run: DISPLAY=:0 python setup/handshake_login.py\n"
+            "2. Log in with your .edu or alumni account\n"
+            "3. Handshake jobs will appear in /queue\n\n"
+            "Requires a Handshake account (current student or recent grad)."
+        )
 
 
 async def cmd_scams(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
