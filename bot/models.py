@@ -156,6 +156,19 @@ class QueuedJob:
 
 
 @dataclass
+class ReferralCandidate:
+    id: int | None
+    app_id: int | None
+    name: str
+    headline: str = ""
+    linkedin_url: str = ""
+    connection_type: str = ""   # '1st', '2nd', 'alumni'
+    shared_name: str = ""
+    draft_message: str = ""
+    created_at: str = ""
+
+
+@dataclass
 class EmailThread:
     message_id: str       # RFC 2822 Message-ID header value
     thread_id: str        # In-Reply-To / References chain root (or message_id if root)

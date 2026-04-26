@@ -15,6 +15,7 @@ Two entry points called from the background loop in main.py:
         Jobs above auto_apply_threshold with all fields resolvable → auto-applied.
         Everything else is collected into a batch review message for the user.
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -23,9 +24,10 @@ from telegram import Bot
 
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
-from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
-from bot.models import ApplicationRecord, QueuedJob, SavedSearch
+from bot.llm import analyze_job, draft_outreach_message, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
+from bot.models import ApplicationRecord, JobInfo, QueuedJob, SavedSearch
 from bot.profile import load_preferences
+from bot.referral_radar import find_referral_candidates
 from bot.scraper import field_answer_hint
 from bot.telegram_bot import _build_batch_message, PENDING_BATCH
 
@@ -289,6 +291,11 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         app_id = await db.insert_application(record)
         await db.update_queued_job_status(queued_job.id, "applied" if result.success else "dismissed")
 
+        # ----- Step 8b: Fire-and-forget referral radar -----
+        asyncio.create_task(
+            _run_referral_radar(db, app_id, job_info, profile, linkedin_auth, chat_id, bot)
+        )
+
         # ----- Step 9: Notify -----
         fit_lines = fit_summary_lines(job_analysis, fit, prefs)
         fit_summary = ("\n" + "\n".join(fit_lines)) if fit_lines else ""
@@ -338,3 +345,89 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                 app.bot_data[PENDING_BATCH] = review_jobs
             except Exception as e:
                 logger.error("auto_apply: batch review message failed: %s", e)
+
+
+async def _run_referral_radar(
+    db: ApplicationDB,
+    app_id: int,
+    job_info: "JobInfo",
+    profile: dict,
+    linkedin_auth: str,
+    chat_id: int,
+    bot: Bot,
+) -> None:
+    """Background task: find mutual connections and send referral suggestions via Telegram.
+
+    Runs after a successful application record has been inserted. Does not block the
+    apply pipeline. All errors are caught and logged.
+
+    Args:
+        db: Initialised ApplicationDB instance.
+        app_id: ID of the newly created application record.
+        job_info: JobInfo for the applied job.
+        profile: User's profile dict.
+        linkedin_auth: Path to LinkedIn auth state JSON.
+        chat_id: Telegram chat ID for notifications.
+        bot: Telegram Bot instance.
+    """
+    try:
+        radar_config = profile.get("referral_radar") or {}
+        if not radar_config.get("enabled", True):
+            return
+
+        user_school = ""
+        edu = profile.get("education") or []
+        if edu and isinstance(edu, list) and isinstance(edu[0], dict):
+            user_school = edu[0].get("institution", "")
+
+        user_companies = []
+        history = profile.get("work_history") or []
+        for job in history:
+            if isinstance(job, dict) and job.get("company"):
+                user_companies.append(job["company"])
+
+        candidates = await find_referral_candidates(
+            company=job_info.company,
+            user_school=user_school,
+            user_companies=user_companies,
+            linkedin_auth=linkedin_auth,
+        )
+
+        if not candidates:
+            return
+
+        # Draft outreach messages for each candidate
+        for candidate in candidates:
+            try:
+                msg = await draft_outreach_message(
+                    candidate_name=candidate.name,
+                    candidate_headline=candidate.headline,
+                    company=job_info.company,
+                    job_title=job_info.title,
+                    connection_type=candidate.connection_type,
+                    shared_connection=candidate.shared_name,
+                    profile=profile,
+                )
+                candidate.draft_message = msg
+            except LLMError as llm_err:
+                logger.warning("referral_radar: draft_outreach_message failed for %r: %s", candidate.name, llm_err)
+
+        await db.insert_referral_candidates(app_id, candidates)
+
+        # Build and send Telegram notification
+        lines = [f"Referral leads for {job_info.title} at {job_info.company} (app #{app_id}):"]
+        for i, candidate in enumerate(candidates, 1):
+            conn_label = f" ({candidate.connection_type})" if candidate.connection_type else ""
+            lines.append(f"\n{i}. {candidate.name}{conn_label}")
+            if candidate.headline:
+                lines.append(f"   {candidate.headline}")
+            if candidate.linkedin_url:
+                lines.append(f"   {candidate.linkedin_url}")
+            if candidate.draft_message:
+                lines.append(f"   Draft: {candidate.draft_message}")
+        lines.append(f"\nUse /referrals {app_id} to retrieve these anytime.")
+
+        await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+
+    except Exception as exc:
+        logger.warning("referral_radar: background task failed for app_id=%d: %s", app_id, exc)

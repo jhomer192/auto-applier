@@ -19,8 +19,9 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
-from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
+from bot.llm import analyze_job, claude_call, draft_outreach_message, extract_achievements, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
+from bot.referral_radar import find_referral_candidates
 from bot.profile import load_preferences, save_preferences
 from bot.scraper import field_answer_hint
 
@@ -111,6 +112,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("linkedin", cmd_linkedin))
         app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(CommandHandler("sources", cmd_sources))
+        app.add_handler(CommandHandler("referrals", cmd_referrals))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -202,7 +204,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/status \u2014 application counts by status\n"
         "/history [N] \u2014 last N applications (default 10)\n"
         "/resume <id> \u2014 retrieve tailored resume\n"
-        "/coverletter <id> \u2014 retrieve cover letter\n\n"
+        "/coverletter <id> \u2014 retrieve cover letter\n"
+        "/referrals <id> \u2014 view referral candidates for an application\n\n"
 
         "── Profile & branding ──\n"
         "/profile \u2014 add achievements to your profile\n"
@@ -571,6 +574,52 @@ async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     header = f"Cover letter for [{app_id}] {record.title} @ {record.company}:\n\n"
     await update.message.reply_text(header + record.cover_letter)
+
+
+async def cmd_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show referral candidates for a given application.
+
+    /referrals <app_id>
+    """
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /referrals <application id>")
+        return
+    try:
+        app_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("ID must be a number.")
+        return
+
+    record = await db.get_by_id(app_id)
+    if not record:
+        await update.message.reply_text(f"No application with ID {app_id}.")
+        return
+
+    candidates = await db.get_referral_candidates(app_id)
+    if not candidates:
+        await update.message.reply_text(
+            f"No referral candidates found for application {app_id} "
+            f"({record.title} @ {record.company}).\n"
+            "Referral radar runs automatically after each application."
+        )
+        return
+
+    lines = [f"Referral candidates for [{app_id}] {record.title} @ {record.company}:"]
+    for i, candidate in enumerate(candidates, 1):
+        conn_label = f" ({candidate.connection_type})" if candidate.connection_type else ""
+        lines.append(f"\n{i}. {candidate.name}{conn_label}")
+        if candidate.headline:
+            lines.append(f"   {candidate.headline}")
+        if candidate.linkedin_url:
+            lines.append(f"   {candidate.linkedin_url}")
+        if candidate.draft_message:
+            lines.append(f"   Draft: {candidate.draft_message}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1009,11 +1058,44 @@ async def _handle_job_url(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         threshold_hint = f"\n(Score is {gap} pts below your auto-apply threshold of {prefs.auto_apply_threshold})"
 
     context.user_data[PENDING_JOB] = pending
+
+    # Run referral radar before showing the Y/N prompt (non-blocking lookup)
+    referral_block = ""
+    radar_enabled = profile.get("referral_radar", {}).get("enabled", True)
+    if radar_enabled:
+        try:
+            linkedin_auth: str = context.bot_data.get("linkedin_auth", "data/linkedin_auth.json")
+            user_school = ""
+            edu = profile.get("education") or []
+            if edu and isinstance(edu, list) and isinstance(edu[0], dict):
+                user_school = edu[0].get("institution", "")
+            user_companies = [
+                j["company"] for j in (profile.get("work_history") or [])
+                if isinstance(j, dict) and j.get("company")
+            ]
+            radar_candidates = await find_referral_candidates(
+                company=job_info.company,
+                user_school=user_school,
+                user_companies=user_companies,
+                linkedin_auth=linkedin_auth,
+                max_results=3,
+                timeout=20,
+            )
+            if radar_candidates:
+                ref_lines = ["\nReferral leads:"]
+                for i, rc in enumerate(radar_candidates, 1):
+                    conn_label = f" ({rc.connection_type})" if rc.connection_type else ""
+                    ref_lines.append(f"{i}. {rc.name}{conn_label} — {rc.headline[:60]}")
+                referral_block = "\n".join(ref_lines)
+        except Exception as radar_err:
+            logger.warning("referral_radar: inline lookup failed: %s", radar_err)
+
     await update.message.reply_text(
         f"*{job_info.title}* at *{job_info.company}*"
         f"{fit_block}"
         f"{breakdown_block}"
         f"{threshold_hint}"
+        f"{referral_block}"
         f"{cover_preview}"
         f"{manual_note}\n\n"
         "Apply? Y / N",

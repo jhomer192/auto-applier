@@ -1,7 +1,7 @@
 import aiosqlite
 import logging
 from pathlib import Path
-from bot.models import ApplicationRecord, EmailThread, QueuedJob, SavedSearch
+from bot.models import ApplicationRecord, EmailThread, QueuedJob, ReferralCandidate, SavedSearch
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,23 @@ CREATE TABLE IF NOT EXISTS job_queue (
 """
 CREATE_JOB_QUEUE_IDX = "CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status);"
 
+CREATE_REFERRAL_CANDIDATES_TABLE = """
+CREATE TABLE IF NOT EXISTS referral_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_id INTEGER REFERENCES applications(id),
+    name TEXT NOT NULL,
+    headline TEXT DEFAULT '',
+    linkedin_url TEXT DEFAULT '',
+    connection_type TEXT DEFAULT '',
+    shared_name TEXT DEFAULT '',
+    draft_message TEXT DEFAULT '',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+"""
+CREATE_REFERRAL_CANDIDATES_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_referral_candidates_app ON referral_candidates(app_id);"
+)
+
 
 class ApplicationDB:
     def __init__(self, db_path: str = "data/applications.db") -> None:
@@ -95,6 +112,8 @@ class ApplicationDB:
             await db.execute(CREATE_SEEN_JOBS_IDX)
             await db.execute(CREATE_JOB_QUEUE_TABLE)
             await db.execute(CREATE_JOB_QUEUE_IDX)
+            await db.execute(CREATE_REFERRAL_CANDIDATES_TABLE)
+            await db.execute(CREATE_REFERRAL_CANDIDATES_IDX)
             # Migrate existing DBs: add new columns if missing
             for col, defn in [
                 ("cover_letter", "TEXT NOT NULL DEFAULT ''"),
@@ -368,6 +387,61 @@ class ApplicationDB:
             rows = await cursor.fetchall()
             return {row[0]: row[1] for row in rows}
 
+    # --- Referral candidates ---
+
+    async def insert_referral_candidates(self, app_id: int, candidates: list) -> None:
+        """Batch-insert referral candidates for an application.
+
+        Args:
+            app_id: The application ID to associate candidates with.
+            candidates: List of ReferralCandidate instances.
+        """
+        if not candidates:
+            return
+        rows = [
+            (app_id, c.name, c.headline, c.linkedin_url, c.connection_type, c.shared_name, c.draft_message)
+            for c in candidates
+        ]
+        async with aiosqlite.connect(self._path) as db:
+            await db.executemany(
+                """INSERT INTO referral_candidates
+                   (app_id, name, headline, linkedin_url, connection_type, shared_name, draft_message)
+                   VALUES (?,?,?,?,?,?,?)""",
+                rows,
+            )
+            await db.commit()
+
+    async def get_referral_candidates(self, app_id: int) -> list:
+        """Return referral candidates for the given application ID.
+
+        Args:
+            app_id: Application ID to look up.
+
+        Returns:
+            List of ReferralCandidate instances ordered by insertion order.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM referral_candidates WHERE app_id=? ORDER BY id ASC",
+                (app_id,),
+            )
+            rows = await cursor.fetchall()
+            return [_row_to_referral_candidate(row) for row in rows]
+
+    async def has_referrals(self, app_id: int) -> bool:
+        """Return True if any referral candidates exist for the given application ID.
+
+        Args:
+            app_id: Application ID to check.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM referral_candidates WHERE app_id=? LIMIT 1",
+                (app_id,),
+            )
+            return await cursor.fetchone() is not None
+
     async def get_top_companies(self, limit: int = 5) -> list[tuple[str, int]]:
         """Return [(company, count)] for the top N most-applied companies."""
         async with aiosqlite.connect(self._path) as db:
@@ -378,6 +452,20 @@ class ApplicationDB:
             )
             rows = await cursor.fetchall()
             return [(row[0], row[1]) for row in rows]
+
+
+def _row_to_referral_candidate(row: aiosqlite.Row) -> "ReferralCandidate":
+    return ReferralCandidate(
+        id=row["id"],
+        app_id=row["app_id"],
+        name=row["name"],
+        headline=row["headline"] or "",
+        linkedin_url=row["linkedin_url"] or "",
+        connection_type=row["connection_type"] or "",
+        shared_name=row["shared_name"] or "",
+        draft_message=row["draft_message"] or "",
+        created_at=row["created_at"] or "",
+    )
 
 
 def _row_to_email(row: aiosqlite.Row) -> EmailThread:

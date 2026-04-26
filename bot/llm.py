@@ -575,6 +575,73 @@ async def generate_interview_prep(
     return await claude_call(prompt)
 
 
+async def draft_outreach_message(
+    candidate_name: str,
+    candidate_headline: str,
+    company: str,
+    job_title: str,
+    connection_type: str,
+    shared_connection: str,
+    profile: dict,
+) -> str:
+    """Draft a short personalized LinkedIn outreach message asking for a referral.
+
+    The message must reference real shared context (school, company, or mutual
+    connection). No generic phrases or fabricated claims are allowed.
+
+    Args:
+        candidate_name: The referral candidate's name.
+        candidate_headline: The candidate's LinkedIn headline.
+        company: Target company name.
+        job_title: The job title being applied to.
+        connection_type: Relationship type — '1st', '2nd', or 'alumni'.
+        shared_connection: Mutual connection name, shared employer, or shared school.
+        profile: Candidate (applicant) profile dict.
+
+    Returns:
+        Outreach message text, max 280 characters.
+    """
+    safe_profile = _sanitize_profile(profile)
+    applicant_name = safe_profile.get("name", "")
+    applicant_school = ""
+    edu = safe_profile.get("education", [])
+    if edu and isinstance(edu, list):
+        applicant_school = edu[0].get("institution", "") if isinstance(edu[0], dict) else ""
+
+    connection_context = ""
+    if connection_type == "alumni" and shared_connection:
+        connection_context = f"You both attended {shared_connection}."
+    elif connection_type == "2nd" and shared_connection:
+        connection_context = f"You share a mutual connection: {shared_connection}."
+    elif connection_type == "1st":
+        connection_context = "You are directly connected on LinkedIn."
+    elif shared_connection:
+        connection_context = f"Shared context: {shared_connection}."
+
+    prompt = (
+        f"Write a short, personalized LinkedIn connection/outreach message from a job applicant "
+        f"to someone who works at their target company. The goal is to ask for a referral or "
+        f"advice about the role.\n\n"
+        f"APPLICANT NAME: {applicant_name}\n"
+        f"APPLICANT SCHOOL: {applicant_school}\n"
+        f"RECIPIENT NAME: {candidate_name}\n"
+        f"RECIPIENT HEADLINE: {candidate_headline}\n"
+        f"TARGET COMPANY: {company}\n"
+        f"TARGET ROLE: {job_title}\n"
+        f"RELATIONSHIP: {connection_type}\n"
+        f"SHARED CONTEXT: {connection_context}\n\n"
+        "Rules:\n"
+        "1. Maximum 280 characters total.\n"
+        "2. Must reference the actual shared context (school, mutual connection, or company).\n"
+        "3. No generic phrases like 'I hope this message finds you well' or 'I came across your profile'.\n"
+        "4. Do NOT fabricate any shared experience not listed above.\n"
+        "5. Be warm but direct — state the interest in the role and ask a specific question.\n"
+        "6. Output ONLY the message text, no explanation or formatting.\n\n"
+        "Message:"
+    )
+    return await claude_call(prompt)
+
+
 async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str:
     """Generate a grounded, tailored cover letter. Never invents facts.
 
