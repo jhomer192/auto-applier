@@ -538,38 +538,39 @@ async def extract_achievements(answers: list[tuple[str, str]], profile: dict) ->
     return await claude_call(prompt)
 
 
-async def generate_interview_prep(company: str, title: str, job_html: str) -> str:
+async def generate_interview_prep(
+    company: str, title: str, context: str
+) -> str:
     """Generate a concise interview preparation guide for a specific role.
 
-    Called automatically after every successful application.  Tells the user
-    what rounds to expect, which technical topics to review, and gives 3
-    likely questions tailored to this company and role.
+    Called when an interview invite email is detected in the inbox.  Gives the
+    user actionable prep before they reply with their availability.
 
     Args:
         company: Company name.
-        title: Job title.
-        job_html: Raw HTML of the job posting (truncated internally to 3000 chars).
+        title: Job title (may be inferred from email subject if unknown).
+        context: Any available context — email subject/body, job description
+                 snippet, cover letter, etc. Truncated internally to 2000 chars.
 
     Returns:
-        Plain-text prep guide formatted for Telegram (under 400 words).
+        Plain-text prep guide formatted for Telegram (under 350 words).
     """
     prompt = (
-        f"The user just submitted a job application for:\n"
+        f"The user has received an interview invitation for:\n"
         f"  Role: {title}\n"
         f"  Company: {company}\n\n"
-        f"Job posting (first 3000 chars):\n{job_html[:3000]}\n\n"
-        "Generate a concise interview preparation guide. Keep it under 400 words.\n"
-        "Format it as plain text suitable for a Telegram message — no heavy markdown,\n"
-        "use simple numbered lists and short paragraphs.\n\n"
+        f"Context (email / job details):\n{context[:2000]}\n\n"
+        "Generate a concise interview preparation guide. Keep it under 350 words.\n"
+        "Format it as plain text for Telegram — no heavy markdown, use simple numbered\n"
+        "lists and short paragraphs.\n\n"
         "Include exactly these sections:\n"
-        "1. What to expect — typical interview rounds for this role/company "
-        "(phone screen, technical, system design, behavioural, etc.)\n"
-        "2. Technical topics to review — drawn from the job requirements above\n"
-        "3. Company culture — 2-3 signals from the JD that reveal what they value "
-        "(speed, collaboration, research-focus, etc.) — mirror these in answers\n"
-        "4. Three likely interview questions — specific to this role and company\n"
-        "5. One quick tip — something specific to this company or role\n\n"
-        "Be concrete, not generic. Do not pad with filler."
+        "1. What to expect — typical interview rounds for this role/company\n"
+        "   (phone screen, technical, system design, behavioural, etc.)\n"
+        "2. Technical topics to review — inferred from the role and company\n"
+        "3. Culture signals — 2-3 things this company likely values; mirror these\n"
+        "4. Three likely interview questions specific to this role\n"
+        "5. One quick tip specific to this company\n\n"
+        "Be concrete and specific. Do not pad with generic advice."
     )
     return await claude_call(prompt)
 

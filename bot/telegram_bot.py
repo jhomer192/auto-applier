@@ -1163,6 +1163,31 @@ async def notify_new_emails(app: Application) -> None:
             # Append to queue so multiple emails in one poll are all handled
             queue: list = app.bot_data.setdefault(AWAITING_EMAIL_REPLY, [])
             queue.append(email_thread)
+
+            # Interview invite → send a tailored prep guide immediately
+            if category == "interview":
+                try:
+                    # Pull company/title from the linked application if available
+                    app_record = None
+                    if email_thread.app_id:
+                        app_record = await db.get_by_id(email_thread.app_id)
+
+                    company = app_record.company if app_record else email_thread.from_address
+                    title = app_record.title if app_record else email_thread.subject
+                    context_text = (
+                        f"Email subject: {email_thread.subject}\n"
+                        f"Email preview: {email_thread.body_preview}\n"
+                    )
+                    if app_record and app_record.cover_letter:
+                        context_text += f"\nCover letter sent:\n{app_record.cover_letter[:800]}"
+
+                    prep = await generate_interview_prep(company, title, context_text)
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"📚 Interview prep — {title} at {company}:\n\n{prep}",
+                    )
+                except Exception as prep_err:
+                    logger.warning("notify_new_emails: interview prep failed: %s", prep_err)
         except Exception as e:
             logger.error("notify_new_emails: failed to send notification: %s", e)
 
@@ -1555,17 +1580,6 @@ async def _submit_application(
             )
 
         await update.message.reply_text(msg)
-
-        # Send interview prep guide
-        try:
-            prep = await generate_interview_prep(
-                pending.job_info.company, pending.job_info.title, pending.job_info.raw_html
-            )
-            await update.message.reply_text(
-                f"📚 Interview prep — {pending.job_info.title} at {pending.job_info.company}:\n\n{prep}"
-            )
-        except Exception as prep_err:
-            logger.warning("_submit_application: interview prep failed: %s", prep_err)
     else:
         await update.message.reply_text(
             f"Application failed: {result.error}\nNothing was submitted. (ID: {app_id})"
