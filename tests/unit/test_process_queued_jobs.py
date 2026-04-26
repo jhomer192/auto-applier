@@ -331,10 +331,10 @@ def test_auto_apply_success_records_application(tmp_path):
     history = run(db.get_recent(limit=10))
     assert any(r.status == "applied" for r in history)
 
-    # Telegram notification sent
+    # Telegram notification sent (success msg comes before interview prep msg)
     app.bot.send_message.assert_called()
-    call_text = app.bot.send_message.call_args_list[-1][1].get("text", "")
-    assert "Auto-applied" in call_text
+    all_texts = [c[1].get("text", "") for c in app.bot.send_message.call_args_list]
+    assert any("Auto-applied" in t for t in all_texts)
 
 
 def test_auto_apply_success_dismisses_queue_entry(tmp_path):

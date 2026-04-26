@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
-from bot.profile import load_profile, ProfileError
+from bot.profile import load_profile, load_preferences, ProfileError
 from bot.auto_apply import ensure_auto_searches, process_queued_jobs
+from bot.sources import ALL_SOURCES
 from bot.telegram_bot import AutoApplierBot, notify_new_emails, notify_search_matches
 
 logging.basicConfig(
@@ -18,8 +19,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-INBOX_POLL_INTERVAL = int(os.getenv("INBOX_POLL_INTERVAL", "300"))    # seconds (5 minutes)
-SEARCH_POLL_INTERVAL = int(os.getenv("SEARCH_POLL_INTERVAL", "1800"))  # seconds (30 minutes)
+INBOX_POLL_INTERVAL = int(os.getenv("INBOX_POLL_INTERVAL", "300"))      # seconds (5 minutes)
+SEARCH_POLL_INTERVAL = int(os.getenv("SEARCH_POLL_INTERVAL", "1800"))   # seconds (30 minutes)
+SOURCE_POLL_INTERVAL = int(os.getenv("SOURCE_POLL_INTERVAL", "3600"))   # seconds (1 hour)
 
 
 async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:
@@ -63,6 +65,51 @@ async def _search_poll_loop(app, linkedin_auth: str) -> None:
         except Exception as e:
             logger.error("Search poll error: %s", e)
         await asyncio.sleep(SEARCH_POLL_INTERVAL)
+
+
+async def _sources_poll_loop(app) -> None:
+    """Background task: poll external job discovery sources every SOURCE_POLL_INTERVAL seconds.
+
+    Runs all active sources (GitHub new-grad repos, company Greenhouse/Lever boards,
+    GitHub org discovery) and enqueues any new jobs matching the user's desired roles.
+    Already-seen URLs are deduplicated via the seen_jobs table.
+    """
+    logger.info("Sources poller started (every %ds)", SOURCE_POLL_INTERVAL)
+    while True:
+        try:
+            db: ApplicationDB = app.bot_data["db"]
+            profile: dict = app.bot_data["profile"]
+            prefs = load_preferences(profile)
+            keywords = list(prefs.desired_roles) if prefs.desired_roles else []
+
+            if not keywords:
+                logger.debug("sources: no desired_roles configured — skipping poll")
+            else:
+                new_jobs = 0
+                for source in ALL_SOURCES:
+                    source_new = 0
+                    try:
+                        async for job in source.discover(keywords):
+                            if await db.is_job_seen(job.url):
+                                continue
+                            added = await db.enqueue_job(job.url, job.title, job.company)
+                            await db.mark_job_seen(job.url, None)
+                            if added:
+                                source_new += 1
+                                new_jobs += 1
+                    except Exception as src_err:
+                        logger.error("sources: error in %s: %s", source.name, src_err)
+                    if source_new:
+                        logger.info("sources: %s queued %d new jobs", source.name, source_new)
+
+                if new_jobs:
+                    logger.info("sources: total %d new jobs queued this cycle", new_jobs)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("Sources poll error: %s", e)
+        await asyncio.sleep(SOURCE_POLL_INTERVAL)
 
 
 def main() -> None:
@@ -116,6 +163,8 @@ def main() -> None:
             application.create_task(_inbox_poll_loop(application, gmail_inbox))
         # Always start the search poller (it no-ops when there are no saved searches)
         application.create_task(_search_poll_loop(application, linkedin_auth))
+        # Start the sources poller (GitHub repos, company boards, GitHub orgs)
+        application.create_task(_sources_poll_loop(application))
 
     post_init = _post_init
 

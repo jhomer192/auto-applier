@@ -19,7 +19,7 @@ from bot.adapters import AdapterRegistry
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
-from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
+from bot.llm import analyze_job, claude_call, extract_achievements, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
 from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.profile import load_preferences, save_preferences
 from bot.scraper import field_answer_hint
@@ -110,6 +110,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("report", cmd_report))
         app.add_handler(CommandHandler("linkedin", cmd_linkedin))
         app.add_handler(CommandHandler("website", cmd_website))
+        app.add_handler(CommandHandler("sources", cmd_sources))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -1408,6 +1409,50 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show active job discovery sources and their configuration.
+
+    /sources
+    """
+    if not _auth(update, context):
+        return
+
+    import os
+    from bot.sources import ALL_SOURCES
+
+    github_token = bool(os.getenv("GITHUB_TOKEN"))
+    source_poll_interval = int(os.getenv("SOURCE_POLL_INTERVAL", "3600"))
+    minutes = source_poll_interval // 60
+
+    lines = ["📡 Job Discovery Sources\n"]
+    for source in ALL_SOURCES:
+        if source.name == "github_newgrad":
+            lines.append(
+                "✅ GitHub New Grad — active\n"
+                "   SimplifyJobs, speedyapply, vanshb03 repos (updated daily)\n"
+                "   Covers SWE, quant, finance new-grad roles"
+            )
+        elif source.name == "company_pages":
+            lines.append(
+                "✅ Company Pages — active\n"
+                "   35+ companies via Greenhouse & Lever JSON APIs\n"
+                "   Includes: Stripe, Anthropic, Figma, Two Sigma, Citadel, HRT, Optiver, ..."
+            )
+        elif source.name == "github_orgs":
+            status = "✅ GitHub Orgs — active" if github_token else "❌ GitHub Orgs — inactive"
+            note = (
+                "   Discovers companies via GitHub org metadata"
+                if github_token
+                else "   Set GITHUB_TOKEN in .env to enable"
+            )
+            lines.append(f"{status}\n{note}")
+
+    lines.append(f"\nPolls every {minutes} min. Jobs matching your desired roles are queued automatically.")
+    lines.append("Use /queue to review, or set /prefs autoapply <score> for hands-free mode.")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def _submit_application(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1510,6 +1555,17 @@ async def _submit_application(
             )
 
         await update.message.reply_text(msg)
+
+        # Send interview prep guide
+        try:
+            prep = await generate_interview_prep(
+                pending.job_info.company, pending.job_info.title, pending.job_info.raw_html
+            )
+            await update.message.reply_text(
+                f"📚 Interview prep — {pending.job_info.title} at {pending.job_info.company}:\n\n{prep}"
+            )
+        except Exception as prep_err:
+            logger.warning("_submit_application: interview prep failed: %s", prep_err)
     else:
         await update.message.reply_text(
             f"Application failed: {result.error}\nNothing was submitted. (ID: {app_id})"

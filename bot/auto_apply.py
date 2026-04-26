@@ -23,7 +23,7 @@ from telegram import Bot
 
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
-from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
+from bot.llm import analyze_job, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
 from bot.models import ApplicationRecord, QueuedJob, SavedSearch
 from bot.profile import load_preferences
 from bot.scraper import field_answer_hint
@@ -316,6 +316,18 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
                         await bot.send_photo(chat_id=chat_id, photo=f)
                 except Exception as photo_err:
                     logger.warning("auto_apply: could not send screenshot: %s", photo_err)
+            # Send interview prep guide after every successful application
+            if result.success:
+                try:
+                    prep = await generate_interview_prep(
+                        job_info.company, job_info.title, job_info.raw_html
+                    )
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"📚 Interview prep — {job_info.title} at {job_info.company}:\n\n{prep}",
+                    )
+                except Exception as prep_err:
+                    logger.warning("auto_apply: interview prep failed: %s", prep_err)
         except Exception as e:
             logger.error("auto_apply: notification failed: %s", e)
 

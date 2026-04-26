@@ -191,6 +191,7 @@ If exit 0: tell the user:
 > **Passive discovery commands:**
 > - `/queue` — view pending discovered jobs, reply with numbers (e.g. "1,3") or "all" to investigate
 > - `/report` — pipeline stats (today/week/all-time) + queue size + top companies
+> - `/sources` — show active job discovery sources (GitHub new-grad repos, company boards, GitHub orgs)
 >
 > **Profile, branding & history:**
 > - `/profile` — run achievement interview to update profile
@@ -244,6 +245,7 @@ To enable:
 - `/search rm <id>` — pause a search
 - `/queue` — show pending jobs in the queue right now
 - `/report` — pipeline stats (today/week/all-time), queue size, top companies
+- `/sources` — show which discovery sources are active and how to configure them
 
 **Preferences:**
 - `/prefs autosearch on|off` — auto-generate searches from desired roles (default: on)
@@ -267,6 +269,15 @@ To enable:
 - `/report` — full pipeline stats + queue size + top companies
 - `/cancel` — dismiss the current pending item (one at a time: job confirmation or recruiter email)
 - `/help` — show all commands
+
+**Job discovery sources:** The bot discovers jobs from three sources every hour, filtered by your desired roles:
+- **GitHub New Grad repos** — SimplifyJobs/New-Grad-Positions, speedyapply, vanshb03 (updated daily, includes quant/finance roles)
+- **Company job boards** — 35+ companies via Greenhouse & Lever JSON APIs (Stripe, Anthropic, Two Sigma, Citadel, HRT, Optiver, ...)
+- **GitHub Orgs** — discovers companies via GitHub org metadata; needs `GITHUB_TOKEN=<token>` in `.env` (optional)
+
+Discovered jobs are queued automatically. Use `/queue` to review or set `/prefs autoapply <score>` for hands-free mode. Use `/sources` to see what's active.
+
+**Interview prep:** After every successful application (auto or manual), the bot automatically sends a tailored interview preparation guide covering expected rounds, technical topics to review, likely questions, and company-specific tips.
 
 **Gmail inbox:** If `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are set in `.env`, the bot
 polls your inbox every 5 minutes. When a recruiter emails you, you get a Telegram

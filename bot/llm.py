@@ -538,6 +538,42 @@ async def extract_achievements(answers: list[tuple[str, str]], profile: dict) ->
     return await claude_call(prompt)
 
 
+async def generate_interview_prep(company: str, title: str, job_html: str) -> str:
+    """Generate a concise interview preparation guide for a specific role.
+
+    Called automatically after every successful application.  Tells the user
+    what rounds to expect, which technical topics to review, and gives 3
+    likely questions tailored to this company and role.
+
+    Args:
+        company: Company name.
+        title: Job title.
+        job_html: Raw HTML of the job posting (truncated internally to 3000 chars).
+
+    Returns:
+        Plain-text prep guide formatted for Telegram (under 400 words).
+    """
+    prompt = (
+        f"The user just submitted a job application for:\n"
+        f"  Role: {title}\n"
+        f"  Company: {company}\n\n"
+        f"Job posting (first 3000 chars):\n{job_html[:3000]}\n\n"
+        "Generate a concise interview preparation guide. Keep it under 400 words.\n"
+        "Format it as plain text suitable for a Telegram message — no heavy markdown,\n"
+        "use simple numbered lists and short paragraphs.\n\n"
+        "Include exactly these sections:\n"
+        "1. What to expect — typical interview rounds for this role/company "
+        "(phone screen, technical, system design, behavioural, etc.)\n"
+        "2. Technical topics to review — drawn from the job requirements above\n"
+        "3. Company culture — 2-3 signals from the JD that reveal what they value "
+        "(speed, collaboration, research-focus, etc.) — mirror these in answers\n"
+        "4. Three likely interview questions — specific to this role and company\n"
+        "5. One quick tip — something specific to this company or role\n\n"
+        "Be concrete, not generic. Do not pad with filler."
+    )
+    return await claude_call(prompt)
+
+
 async def generate_cover_letter(job_analysis: JobAnalysis, profile: dict) -> str:
     """Generate a grounded, tailored cover letter. Never invents facts.
 
