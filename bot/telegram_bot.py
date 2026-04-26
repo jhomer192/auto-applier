@@ -96,7 +96,7 @@ class AutoApplierBot:
         app.bot_data["profile_path"] = self._profile_path
         app.bot_data["linkedin_auth"] = self._linkedin_auth
 
-        app.add_handler(CommandHandler("start", cmd_help))
+        app.add_handler(CommandHandler("start", cmd_start))
         app.add_handler(CommandHandler("help", cmd_help))
         app.add_handler(CommandHandler("status", cmd_status))
         app.add_handler(CommandHandler("history", cmd_history))
@@ -124,6 +124,50 @@ class AutoApplierBot:
 def _auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Return True only if message is from the authorized chat."""
     return bool(update.effective_user and update.effective_user.id == context.bot_data["authorized_user_id"])
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _auth(update, context):
+        return
+    db: ApplicationDB = context.bot_data["db"]
+    profile: dict = context.bot_data["profile"]
+    prefs = load_preferences(profile)
+
+    recent_count = len(await db.get_recent(limit=200))
+    has_roles = bool(prefs.desired_roles)
+    has_searches = bool(await db.get_active_searches())
+    queue_count = await db.get_queue_count()
+
+    if recent_count == 0 and not has_roles:
+        # First-time user — walk them through the two most important things
+        await update.message.reply_text(
+            "Hey! I apply for jobs automatically — you set your preferences once, "
+            "then I find matching jobs, write tailored resumes and cover letters, "
+            "and submit applications for you.\n\n"
+            "Two things to do first:\n\n"
+            "1. Tell me what roles you want:\n"
+            "   /prefs roles Software Engineer, Backend Engineer\n\n"
+            "2. Tell me what you're looking for:\n"
+            "   /prefs salary 120000\n"
+            "   /prefs arrangement remote\n"
+            "   /prefs seniority junior,mid,senior\n\n"
+            "After that, just send me any job URL and I'll handle the application. "
+            "Or turn on auto-search and I'll find jobs for you:\n"
+            "   /prefs autosearch on\n\n"
+            "Type anything if you have questions — I'll help."
+        )
+    elif queue_count > 0:
+        await update.message.reply_text(
+            f"Welcome back. You have {queue_count} job{'s' if queue_count != 1 else ''} "
+            f"waiting in the queue.\n\n"
+            "Use /queue to review them, or send me a new job URL to apply directly."
+        )
+    else:
+        await update.message.reply_text(
+            f"Welcome back. {recent_count} application{'s' if recent_count != 1 else ''} sent so far.\n\n"
+            "Send me a job URL to apply, or use /queue to check for discovered jobs. "
+            "Type anything if you have questions."
+        )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -268,6 +312,74 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("Nothing to cancel.")
 
 
+async def _handle_conversational(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str
+) -> None:
+    """Fallback for any message that isn't a command, URL, or known response.
+
+    Uses Claude to interpret the user's intent and respond helpfully in plain
+    language.  Works for greetings, confused users, natural-language preference
+    expressions ("I want remote SWE jobs in NYC"), and anything else.
+    """
+    db: ApplicationDB = context.bot_data["db"]
+    profile: dict = context.bot_data["profile"]
+    prefs = load_preferences(profile)
+
+    recent_count = len(await db.get_recent(limit=200))
+    queue_count = await db.get_queue_count()
+    searches = await db.get_active_searches()
+
+    roles_str = ", ".join(prefs.desired_roles) if prefs.desired_roles else "not set"
+    salary_str = f"${prefs.min_salary:,}" if prefs.min_salary else "not set"
+    seniority_str = ", ".join(prefs.seniority) if prefs.seniority else "any"
+    arrangement_str = ", ".join(prefs.work_arrangement) if prefs.work_arrangement else "any"
+    searches_str = (
+        ", ".join(f'"{s.query}"' for s in searches) if searches else "none set up yet"
+    )
+
+    prompt = (
+        "You are a helpful Telegram bot that automates job applications for people.\n\n"
+        "The user sent a message you need to interpret and respond to helpfully.\n"
+        "Respond in plain conversational text — no markdown, no bullet points, "
+        "2–4 sentences max. Be warm, clear, and give them exactly one actionable next step.\n\n"
+        "What this bot can do:\n"
+        "- Paste any LinkedIn Easy Apply, Greenhouse, or Lever job URL → bot analyzes it, "
+        "writes a tailored resume and cover letter, asks Y/N to apply\n"
+        "- /search add <role> [in <location>] → bot checks LinkedIn every 30 min, "
+        "queues matching new jobs automatically\n"
+        "- /queue → see discovered jobs and pick which ones to look at\n"
+        "- /prefs roles <role1,role2> → tell the bot what jobs you want\n"
+        "- /prefs salary <min> → set your salary floor\n"
+        "- /prefs seniority junior|mid|senior|staff → filter by level\n"
+        "- /prefs arrangement remote|hybrid|onsite → filter by location type\n"
+        "- /prefs autoapply 80 → bot auto-submits jobs scoring 80+ without asking\n"
+        "- /profile → run an interview to add achievements to your profile\n"
+        "- /sources → see GitHub new-grad repos and company job boards being monitored\n\n"
+        f"Their current setup:\n"
+        f"  Desired roles: {roles_str}\n"
+        f"  Min salary: {salary_str}\n"
+        f"  Seniority: {seniority_str}\n"
+        f"  Arrangement: {arrangement_str}\n"
+        f"  Active searches: {searches_str}\n"
+        f"  Applications sent: {recent_count}\n"
+        f"  Jobs waiting in queue: {queue_count}\n\n"
+        f"User's message: {text}\n\n"
+        "If they seem to be describing job preferences in natural language "
+        "(e.g. 'I want remote software jobs in NYC'), extract what they said and "
+        "give them the exact /prefs commands to run. "
+        "If they seem lost or are greeting you, briefly explain the single most "
+        "useful thing they can do right now given their setup above."
+    )
+
+    try:
+        response = await claude_call(prompt)
+        await update.message.reply_text(response)
+    except LLMError:
+        await update.message.reply_text(
+            "Send me a job URL to apply, or use /help to see what I can do."
+        )
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _auth(update, context):
         return
@@ -325,10 +437,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _handle_job_url(update, context, text)
         return
 
-    # Case 4: unrecognized
-    await update.message.reply_text(
-        "Send me a job URL (LinkedIn Easy Apply, Greenhouse, or Lever) to get started.\n/help for commands."
-    )
+    # Case 4: unrecognized — use Claude to understand intent and guide them
+    await _handle_conversational(update, context, text)
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
