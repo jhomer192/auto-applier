@@ -57,7 +57,13 @@ Run: `python3 --version`
 
 If below 3.11:
 ```bash
-sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv python3.11-distutils
+sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv || \
+  sudo apt-get install -y python3.11 python3.11-venv python3.11-distutils
+```
+
+After installing, also ensure the venv package is available for your version:
+```bash
+python3 -m venv --help || sudo apt-get install -y python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')-venv
 ```
 
 ## Step 2 — System dependencies for Playwright

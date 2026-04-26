@@ -74,8 +74,9 @@ elif python3 --version 2>&1 | grep -qE '3\.(11|12|13)'; then
 else
   info "Python 3.11+ not found — installing..."
   sudo apt-get update -qq
-  sudo apt-get install -y python3.11 python3.11-venv python3.11-distutils
-  PYTHON=python3.11
+  sudo apt-get install -y python3.12 python3.12-venv || \
+    sudo apt-get install -y python3.11 python3.11-venv python3.11-distutils
+  command -v python3.12 &>/dev/null && PYTHON=python3.12 || PYTHON=python3.11
 fi
 ok "Using $PYTHON ($($PYTHON --version))"
 
@@ -107,6 +108,11 @@ fi
 step "Setting up Python environment"
 if [[ ! -d ".venv" ]]; then
   info "Creating virtual environment..."
+  # Ensure venv module is available for the selected Python version
+  if ! $PYTHON -m venv --help &>/dev/null 2>&1; then
+    VER=$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    sudo apt-get install -y "python${VER}-venv" 2>/dev/null || true
+  fi
   $PYTHON -m venv .venv
 fi
 ok "Virtual environment ready"

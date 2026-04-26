@@ -10,8 +10,20 @@ human_type / human_click for their core behaviours.
 """
 import asyncio
 import random
+import shutil
 import pytest
 import pytest_asyncio
+
+# Skip browser tests when Chromium isn't installed (CI / fresh clone before `playwright install`)
+def _chromium_available() -> bool:
+    import glob, os
+    ms_pw = os.path.expanduser("~/.cache/ms-playwright")
+    # playwright install chromium puts the binary under chromium-*/chrome-linux*/chrome
+    return bool(glob.glob(f"{ms_pw}/chromium-*/chrome-linux*/chrome"))
+
+requires_chromium = pytest.mark.skipif(
+    not _chromium_available(), reason="Chromium not installed — run: playwright install chromium"
+)
 
 from bot.human import (
     after_click_pause,
@@ -233,6 +245,7 @@ def test_timezone_list_contains_us_timezones():
     assert len(us_zones) >= 4
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_launch_stealth_context_hides_webdriver():
     """navigator.webdriver must be undefined (not true) in a stealth context."""
@@ -249,6 +262,7 @@ async def test_launch_stealth_context_hides_webdriver():
             await browser.close()
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_launch_stealth_context_has_plugins():
     """navigator.plugins must be non-empty (real browsers have plugins)."""
@@ -263,6 +277,7 @@ async def test_launch_stealth_context_has_plugins():
             await browser.close()
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_launch_stealth_context_randomises_viewport():
     """Two fresh contexts should not always use the same viewport (probabilistic)."""
@@ -287,6 +302,7 @@ async def test_launch_stealth_context_randomises_viewport():
     )
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_launch_stealth_context_sets_accept_downloads():
     """The context must have accept_downloads=True so file uploads work."""
@@ -301,6 +317,7 @@ async def test_launch_stealth_context_sets_accept_downloads():
             await browser.close()
 
 
+@requires_chromium
 @pytest.mark.asyncio
 async def test_launch_stealth_context_chrome_object_present():
     """window.chrome must exist (real Chrome has it; headless Chromium by default doesn't)."""
