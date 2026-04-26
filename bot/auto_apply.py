@@ -106,6 +106,15 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
 
     prefs = load_preferences(profile)
 
+    # Hard daily cap — safety rail against runaway auto-apply
+    DAILY_CAP = 500
+    today_iso = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)).isoformat()
+    today_stats = await db.get_stats(since_iso=today_iso)
+    applied_today = today_stats.get("applied", 0)
+    if applied_today >= DAILY_CAP:
+        logger.info("auto_apply: daily cap of %d reached (%d applied today) — stopping", DAILY_CAP, applied_today)
+        return
+
     pending = await db.get_pending_queue()
     pending = pending[:5]  # process at most 5 per cycle
     if not pending:
