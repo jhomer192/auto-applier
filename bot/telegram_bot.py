@@ -1866,6 +1866,12 @@ async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 hs_status = "❌ Handshake — not connected"
                 hs_note = "   Run: DISPLAY=:0 python setup/handshake_login.py"
             lines.append(f"{hs_status}\n{hs_note}")
+        elif source.name == "yc_batch":
+            lines.append(
+                "✅ YC Batch Intelligence — active\n"
+                "   Queries YC public API for hiring companies from W26, S25, W25\n"
+                "   Probes each company's Greenhouse & Lever board for matching roles"
+            )
 
     lines.append(f"\nPolls every {minutes} min. Jobs matching your desired roles are queued automatically.")
     lines.append("Use /queue to review, or set /prefs autoapply <score> for hands-free mode.")

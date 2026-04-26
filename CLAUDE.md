@@ -270,10 +270,11 @@ To enable:
 - `/cancel` — dismiss the current pending item (one at a time: job confirmation or recruiter email)
 - `/help` — show all commands
 
-**Job discovery sources:** The bot discovers jobs from three sources every hour, filtered by your desired roles:
+**Job discovery sources:** The bot discovers jobs from four sources every hour, filtered by your desired roles:
 - **GitHub New Grad repos** — SimplifyJobs/New-Grad-Positions, speedyapply, vanshb03 (updated daily, includes quant/finance roles)
 - **Company job boards** — 35+ companies via Greenhouse & Lever JSON APIs (Stripe, Anthropic, Two Sigma, Citadel, HRT, Optiver, ...)
 - **GitHub Orgs** — discovers companies via GitHub org metadata; needs `GITHUB_TOKEN=<token>` in `.env` (optional)
+- **YC batch companies** — queries the YC public API for hiring companies from W26, S25, W25; probes each company's Greenhouse/Lever board for matching roles
 
 Discovered jobs are queued automatically. Use `/queue` to review or set `/prefs autoapply <score>` for hands-free mode. Use `/sources` to see what's active.
 
