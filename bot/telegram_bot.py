@@ -1822,19 +1822,34 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: ApplicationDB = context.bot_data["db"]
     pending = await db.get_pending_queue()
 
+    retryable_failed, permanent_failed = await db.get_failed_counts()
+
     if not pending:
+        suffix = ""
+        if retryable_failed or permanent_failed:
+            suffix_parts = []
+            if retryable_failed:
+                suffix_parts.append(f"{retryable_failed} failed (will retry)")
+            if permanent_failed:
+                suffix_parts.append(f"{permanent_failed} failed permanently")
+            suffix = "\n\n" + ", ".join(suffix_parts) + "."
         await update.message.reply_text(
             "Job queue is empty.\n\n"
             "Add saved searches with /search add <query> [location] — "
-            "I'll poll them every 30 minutes and queue new matches here."
+            "I'll poll them every 30 minutes and queue new matches here." + suffix
         )
         return
 
     context.bot_data[PENDING_BATCH] = pending
-    await update.message.reply_text(
-        _build_batch_message(pending),
-        parse_mode="Markdown",
-    )
+    msg = _build_batch_message(pending)
+    if retryable_failed or permanent_failed:
+        extra_lines = []
+        if retryable_failed:
+            extra_lines.append(f"{retryable_failed} job(s) failed transiently — auto-retrying.")
+        if permanent_failed:
+            extra_lines.append(f"{permanent_failed} job(s) failed after 3 attempts (won't retry).")
+        msg += "\n\n_" + " ".join(extra_lines) + "_"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1879,6 +1894,14 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     lines.append(f"\nJob queue: {queue_count} pending review")
     if queue_count:
         lines.append("  /queue to review")
+
+    retryable_failed, permanent_failed = await db.get_failed_counts()
+    if retryable_failed or permanent_failed:
+        lines.append("\nFailed jobs:")
+        if retryable_failed:
+            lines.append(f"  retryable: {retryable_failed}  (will be re-queued automatically)")
+        if permanent_failed:
+            lines.append(f"  permanent: {permanent_failed}  (3+ attempts, no further retry)")
 
     if top_companies:
         lines.append("\nTop companies applied to:")

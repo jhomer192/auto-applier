@@ -152,10 +152,19 @@ class QueuedJob:
     search_id: int | None = None
     id: int | None = None
     queued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    status: str = "pending"  # "pending" | "dismissed" | "applied" | "skipped"
+    # "pending" — awaiting processing
+    # "dismissed" — intentionally skipped (hard-pass, already applied, no adapter, ...)
+    # "failed" — transient failure; retryable until attempts reaches the cap
+    # "applied" — successfully submitted
+    # "skipped" — superseded; kept for back-compat
+    status: str = "pending"
     scam_score: int = 0
     scam_flag: int = 0
     scam_signals: str = ""  # pipe-separated list
+    # audit fix #3 — retry tracking
+    last_error: str = ""
+    attempts: int = 0
+    last_attempted_at: str | None = None
 
 
 @dataclass

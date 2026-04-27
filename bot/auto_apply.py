@@ -119,6 +119,12 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         logger.info("auto_apply: daily cap of %d reached (%d applied today) — stopping", DAILY_CAP, applied_today)
         return
 
+    # audit fix #3 — re-queue any transiently-failed jobs whose cooldown has
+    # elapsed so they get another shot before the manual-review batch fires.
+    requeued = await db.retry_eligible_failed_jobs()
+    if requeued:
+        logger.info("auto_apply: re-queued %d previously-failed jobs for retry", requeued)
+
     pending = await db.get_pending_queue()
     pending = pending[:5]  # process at most 5 per cycle
     if not pending:
@@ -251,8 +257,11 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         try:
             result = await adapter.submit_application(queued_job.url, fields, resume_path)
         except Exception as e:
+            # audit fix #3 — adapter exceptions are transient; mark 'failed'
+            # (with attempts++) so retry_eligible_failed_jobs() can re-queue
+            # them after the cooldown.
             logger.error("auto_apply: submit failed for %s: %s", queued_job.url, e)
-            await db.update_queued_job_status(queued_job.id, "dismissed")
+            await db.mark_queued_job_failed(queued_job.id, repr(e))
             try:
                 await bot.send_message(
                     chat_id=chat_id,
@@ -292,7 +301,13 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
             tailored_resume=tailored_resume,
         )
         app_id = await db.insert_application(record)
-        await db.update_queued_job_status(queued_job.id, "applied" if result.success else "dismissed")
+        # audit fix #3 — distinguish a successful submission from a failed one.
+        # Previously both routes set status='dismissed', burying failures so
+        # they never retried.
+        if result.success:
+            await db.update_queued_job_status(queued_job.id, "applied")
+        else:
+            await db.mark_queued_job_failed(queued_job.id, result.error or "unknown submit failure")
 
         # ----- Step 8b: Fire-and-forget referral radar -----
         asyncio.create_task(

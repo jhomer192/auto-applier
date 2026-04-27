@@ -141,16 +141,23 @@ class ApplicationDB:
                     await db.execute(f"ALTER TABLE applications ADD COLUMN {col} {defn}")
                 except Exception:
                     logger.debug("Migration: column %r already present, skipping", col)
-            # Scam detection columns on job_queue (idempotent migrations)
+            # Scam detection + retry-tracking columns on job_queue (idempotent migrations)
             for col, typedef in [
                 ("scam_score", "INTEGER NOT NULL DEFAULT 0"),
                 ("scam_flag", "INTEGER NOT NULL DEFAULT 0"),
                 ("scam_signals", "TEXT NOT NULL DEFAULT ''"),
+                # audit fix #3 — distinguish permanent failures from intentional dismissals
+                # and allow retrying transient failures.
+                ("last_error", "TEXT NOT NULL DEFAULT ''"),
+                ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_attempted_at", "TEXT"),
             ]:
                 try:
                     await db.execute(f"ALTER TABLE job_queue ADD COLUMN {col} {typedef}")
-                except Exception:
-                    pass  # column already exists
+                except Exception as exc:
+                    # Column already exists — log at DEBUG so legitimate migration
+                    # errors aren't lost.
+                    logger.debug("Migration: job_queue.%s: %s", col, exc)
             await db.commit()
 
     async def insert_application(self, app: ApplicationRecord) -> int:
@@ -479,6 +486,88 @@ class ApplicationDB:
             await db.execute("UPDATE job_queue SET status=? WHERE id=?", (status, job_id))
             await db.commit()
 
+    async def mark_queued_job_failed(self, job_id: int, error: str) -> None:
+        """Record a failure for a queued job (audit fix #3).
+
+        Sets status='failed', stores the error message, increments attempts,
+        and stamps last_attempted_at. The job stays in this state until either:
+          - retry_failed_jobs() puts it back into 'pending' (if attempts < 3
+            and last_attempted_at > 1h ago), or
+          - attempts hits the cap of 3, at which point it stays 'failed'
+            permanently.
+        """
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """UPDATE job_queue
+                   SET status='failed',
+                       last_error=?,
+                       attempts=attempts+1,
+                       last_attempted_at=?
+                   WHERE id=?""",
+                (error[:500], now_iso, job_id),
+            )
+            await db.commit()
+
+    async def retry_eligible_failed_jobs(self, max_attempts: int = 3, cooldown_hours: int = 1) -> int:
+        """Re-queue jobs that failed transiently and deserve another attempt.
+
+        A failed job is eligible if:
+          - status='failed' (not 'dismissed' — those were intentional skips), AND
+          - attempts < max_attempts, AND
+          - last_attempted_at older than cooldown_hours.
+
+        Returns the count of jobs that were moved back to 'pending'.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                """UPDATE job_queue
+                   SET status='pending'
+                   WHERE status='failed'
+                     AND attempts < ?
+                     AND (last_attempted_at IS NULL OR last_attempted_at < ?)""",
+                (max_attempts, cutoff),
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    async def get_failed_jobs(self, retryable_only: bool = False, max_attempts: int = 3) -> list["QueuedJob"]:
+        """Return jobs in status='failed', optionally only those eligible for retry."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            if retryable_only:
+                cursor = await db.execute(
+                    "SELECT * FROM job_queue WHERE status='failed' AND attempts < ? ORDER BY queued_at ASC",
+                    (max_attempts,),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM job_queue WHERE status='failed' ORDER BY queued_at ASC"
+                )
+            rows = await cursor.fetchall()
+            return [_row_to_queued_job(row) for row in rows]
+
+    async def get_failed_counts(self, max_attempts: int = 3) -> tuple[int, int]:
+        """Return (retryable_count, permanent_count) for failed jobs.
+
+        Retryable: attempts < max_attempts. Permanent: attempts >= max_attempts.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            cursor = await db.execute(
+                """SELECT
+                       SUM(CASE WHEN attempts < ? THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN attempts >= ? THEN 1 ELSE 0 END)
+                   FROM job_queue WHERE status='failed'""",
+                (max_attempts, max_attempts),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return 0, 0
+            return (row[0] or 0, row[1] or 0)
+
     async def dismiss_all_queued(self) -> int:
         """Mark all pending queued jobs as dismissed. Returns count dismissed."""
         async with aiosqlite.connect(self._path) as db:
@@ -631,6 +720,9 @@ def _row_to_queued_job(row: aiosqlite.Row) -> "QueuedJob":
         scam_score=row["scam_score"] if "scam_score" in keys else 0,
         scam_flag=row["scam_flag"] if "scam_flag" in keys else 0,
         scam_signals=row["scam_signals"] if "scam_signals" in keys else "",
+        last_error=row["last_error"] if "last_error" in keys else "",
+        attempts=row["attempts"] if "attempts" in keys else 0,
+        last_attempted_at=row["last_attempted_at"] if "last_attempted_at" in keys else None,
     )
 
 
