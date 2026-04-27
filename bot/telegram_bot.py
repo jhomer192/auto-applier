@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -207,9 +208,28 @@ def _auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(update.effective_user and update.effective_user.id == context.bot_data["authorized_user_id"])
 
 
+def requires_auth(handler):
+    """Decorator: run the handler only if the update is from the authorized user.
+
+    Audit fix #7. Previously every command handler called ``_auth(update, context)``
+    inline as its first statement, which meant any new handler that forgot the
+    check would silently leak data. Centralising the gate in a decorator makes it
+    impossible to register an unguarded handler — and the decorator runs before
+    any of the body, so even argument parsing happens after the auth check.
+
+    Unauthorised updates are dropped silently (no reply, no DB writes, no
+    bot.send_message calls).
+    """
+    @functools.wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not _auth(update, context):
+            return None
+        return await handler(update, context, *args, **kwargs)
+    return wrapper
+
+
+@requires_auth
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     profile: dict = context.bot_data["profile"]
     prefs = load_preferences(profile)
@@ -251,9 +271,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+@requires_auth
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
     await update.message.reply_text(
         "Auto Job Applier\n\n"
         "Send any LinkedIn Easy Apply, Greenhouse, or Lever URL to start an application.\n"
@@ -302,9 +321,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+@requires_auth
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     recent = await db.get_recent(limit=100)
     counts: dict[str, int] = {}
@@ -325,9 +343,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
+@requires_auth
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
 
     # Parse optional N arg
@@ -351,9 +368,8 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("\n".join(lines))
 
 
+@requires_auth
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
 
     if PENDING_JOB in context.user_data:
         pending: PendingJob = context.user_data.pop(PENDING_JOB)
@@ -471,9 +487,8 @@ async def _handle_conversational(
         )
 
 
+@requires_auth
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _auth(update, context):
-        return
 
     text = update.message.text.strip()
     db: ApplicationDB = context.bot_data["db"]
@@ -537,6 +552,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _handle_conversational(update, context, text)
 
 
+@requires_auth
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manage saved job searches.
 
@@ -544,8 +560,6 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     /search list                   — show all saved searches
     /search rm <id>                — deactivate a search
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     args = context.args or []
 
@@ -603,13 +617,12 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("Unknown subcommand. Use: add, list, or rm.")
 
 
+@requires_auth
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send the tailored resume for a past application.
 
     /resume <id>
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     args = context.args or []
     if not args:
@@ -636,13 +649,12 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await reply_chunked(update.message, header + record.tailored_resume)
 
 
+@requires_auth
 async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send the cover letter for a past application.
 
     /coverletter <id>
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     args = context.args or []
     if not args:
@@ -669,13 +681,12 @@ async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await reply_chunked(update.message, header + record.cover_letter)
 
 
+@requires_auth
 async def cmd_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show referral candidates for a given application.
 
     /referrals <app_id>
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     args = context.args or []
     if not args:
@@ -715,6 +726,7 @@ async def cmd_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await reply_chunked(update.message, "\n".join(lines))
 
 
+@requires_auth
 async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View and update job preferences.
 
@@ -729,8 +741,6 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     /prefs sponsorship yes|no    — toggle visa sponsorship requirement
     /prefs autosearch on|off     — auto-generate searches from desired_roles
     """
-    if not _auth(update, context):
-        return
 
     profile: dict = context.bot_data["profile"]
     profile_path: str = context.bot_data["profile_path"]
@@ -918,14 +928,13 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+@requires_auth
 async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start voice fingerprinting or show/reset the current voice profile.
 
     /voice        — start the interview (or show status if profile exists)
     /voice reset  — clear existing profile and restart
     """
-    if not _auth(update, context):
-        return
 
     args = context.args or []
     is_reset = args and args[0].lower() == "reset"
@@ -1033,10 +1042,9 @@ async def _handle_voice_answer(
     )
 
 
+@requires_auth
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start an achievement-mining interview to enrich the candidate profile."""
-    if not _auth(update, context):
-        return
     if context.user_data.get(PROFILE_INTERVIEW):
         await update.message.reply_text(
             "Profile interview already in progress. Answer the question above, or /cancel to quit."
@@ -1812,13 +1820,12 @@ async def _maybe_process_next_batch_item(
     await _handle_job_url(update, context, next_job.url)
 
 
+@requires_auth
 async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show pending discovered jobs and let user select which to investigate.
 
     /queue
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
     pending = await db.get_pending_queue()
 
@@ -1852,13 +1859,12 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+@requires_auth
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show application pipeline stats.
 
     /report
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
 
     from datetime import timedelta
@@ -1911,13 +1917,12 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
+@requires_auth
 async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show active job discovery sources and their configuration.
 
     /sources
     """
-    if not _auth(update, context):
-        return
 
     import os
     from bot.sources import ALL_SOURCES
@@ -1976,13 +1981,12 @@ async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("\n".join(lines))
 
 
+@requires_auth
 async def cmd_handshake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show Handshake connection status and setup instructions.
 
     /handshake
     """
-    if not _auth(update, context):
-        return
 
     from bot.sources.handshake import HandshakeSource
     from pathlib import Path as _Path
@@ -2013,13 +2017,12 @@ async def cmd_handshake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+@requires_auth
 async def cmd_scams(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show rejected and flagged scam postings.
 
     /scams
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
 
     from datetime import timedelta
@@ -2056,13 +2059,12 @@ async def cmd_scams(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
+@requires_auth
 async def cmd_scam_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Approve a flagged job for normal processing.
 
     /scam_apply <n>  — move nth flagged job to clean queue
     """
-    if not _auth(update, context):
-        return
     db: ApplicationDB = context.bot_data["db"]
 
     if not context.args:
@@ -2092,13 +2094,12 @@ async def cmd_scam_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+@requires_auth
 async def cmd_force(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process a URL that was blocked by the scam detector.
 
     /force <url>
     """
-    if not _auth(update, context):
-        return
 
     if not context.args:
         await update.message.reply_text("Usage: /force <url>")
@@ -2236,6 +2237,7 @@ async def _submit_application(
 # ---------------------------------------------------------------------------
 
 
+@requires_auth
 async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Audit the user's LinkedIn profile and give scored feedback.
 
@@ -2244,8 +2246,6 @@ async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
       - Otherwise falls back to profile.yaml links.linkedin.
       - Requires LinkedIn auth state (data/linkedin_auth.json).
     """
-    if not _auth(update, context):
-        return
 
     profile: dict = context.bot_data["profile"]
     args = context.args or []
@@ -2299,14 +2299,13 @@ async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ---------------------------------------------------------------------------
 
 
+@requires_auth
 async def cmd_website(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Generate a personal website from your profile and send deploy instructions.
 
     /website [theme]   — theme: minimal (default) | dark | academic
     /website guide     — show deployment instructions only (no file generated)
     """
-    if not _auth(update, context):
-        return
 
     profile: dict = context.bot_data["profile"]
     args = context.args or []
