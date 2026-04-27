@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,6 +25,61 @@ logger = logging.getLogger(__name__)
 INBOX_POLL_INTERVAL = int(os.getenv("INBOX_POLL_INTERVAL", "300"))      # seconds (5 minutes)
 SEARCH_POLL_INTERVAL = int(os.getenv("SEARCH_POLL_INTERVAL", "1800"))   # seconds (30 minutes)
 SOURCE_POLL_INTERVAL = int(os.getenv("SOURCE_POLL_INTERVAL", "3600"))   # seconds (1 hour)
+
+# Supervisor — watchdog for background poll loops (audit fix #8)
+SUPERVISE_INITIAL_BACKOFF = 5   # seconds before first retry after a crash
+SUPERVISE_MAX_BACKOFF = 300     # cap (5 min) so we don't disappear for hours
+HEARTBEAT_INTERVAL = 300        # 5-minute "still alive" log per loop
+
+
+async def _supervise(app, name: str, loop_factory, *args, **kwargs) -> None:
+    """Run a background poll loop and restart it on any uncaught exception.
+
+    Each poll loop already swallows routine errors (network blips, etc) inside
+    its inner try/except. This wrapper exists for the catastrophic case: an
+    exception we didn't anticipate that escapes the inner handler and would
+    otherwise kill the loop silently — leaving the bot looking healthy while
+    half its features are dead. We log, alert the user via Telegram, and
+    restart with exponential backoff (capped) so a persistent failure can't
+    burn a notification storm.
+
+    Cancellation propagates so shutdown still works cleanly.
+    """
+    backoff = SUPERVISE_INITIAL_BACKOFF
+    while True:
+        try:
+            await loop_factory(*args, **kwargs)
+            # Loop returned without exception (e.g. clean shutdown): we're done.
+            logger.info("%s exited cleanly", name)
+            return
+        except asyncio.CancelledError:
+            logger.info("%s cancelled", name)
+            raise
+        except Exception:
+            logger.exception("%s crashed; restarting in %ds", name, backoff)
+            try:
+                chat_id = app.bot_data.get("authorized_user_id")
+                if chat_id:
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"\u26a0\ufe0f {name} crashed; restarting in {backoff}s",
+                    )
+            except Exception as alert_err:
+                logger.warning("Failed to send crash alert for %s: %s", name, alert_err)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, SUPERVISE_MAX_BACKOFF)
+
+
+async def _heartbeat(name: str, interval: int = HEARTBEAT_INTERVAL) -> None:
+    """Periodic 'still alive' log so a wedged-but-not-crashed loop is visible.
+
+    Runs alongside each poll loop. If the heartbeat stops appearing in the
+    journal, the loop has died (or is hung in a single iteration) regardless
+    of what _supervise reports.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        logger.info("%s heartbeat — alive (%s)", name, time.strftime("%H:%M:%S"))
 
 
 async def _inbox_poll_loop(app, inbox: GmailInbox) -> None:
@@ -192,12 +248,22 @@ def main() -> None:
         handshake_src = next((s for s in ALL_SOURCES if isinstance(s, HandshakeSource)), None)
         application.bot_data["handshake_source"] = handshake_src
 
+        # Each loop runs under _supervise (audit fix #8): an uncaught exception
+        # logs, alerts the user, and restarts with exponential backoff instead
+        # of leaving the bot half-dead. Heartbeats give a separate wedge signal.
         if gmail_inbox:
-            application.create_task(_inbox_poll_loop(application, gmail_inbox))
-        # Always start the search poller (it no-ops when there are no saved searches)
-        application.create_task(_search_poll_loop(application, linkedin_auth))
-        # Start the sources poller (GitHub repos, company boards, GitHub orgs)
-        application.create_task(_sources_poll_loop(application))
+            application.create_task(
+                _supervise(application, "inbox-poller", _inbox_poll_loop, application, gmail_inbox)
+            )
+            application.create_task(_heartbeat("inbox-poller"))
+        application.create_task(
+            _supervise(application, "search-poller", _search_poll_loop, application, linkedin_auth)
+        )
+        application.create_task(_heartbeat("search-poller"))
+        application.create_task(
+            _supervise(application, "sources-poller", _sources_poll_loop, application)
+        )
+        application.create_task(_heartbeat("sources-poller"))
 
     post_init = _post_init
 
