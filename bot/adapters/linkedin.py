@@ -12,6 +12,7 @@ from bot.human import (
     page_load_pause,
     read_pause,
 )
+from bot.adapters.base import FillFailed, assert_field_filled
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
 from bot.verify import (
@@ -226,6 +227,13 @@ class LinkedInAdapter:
                                     await page.check(visible_field.selector)
                                 submitted[visible_field.label] = answer
                                 await field_transition_pause()
+                            # Audit fix #4 — verify the value actually landed in
+                            # the input. LinkedIn Easy Apply selectors mutate often
+                            # and a stale match would otherwise silently succeed.
+                            visible_field.answer = answer
+                            await assert_field_filled(page, visible_field)
+                        except FillFailed:
+                            raise
                         except Exception as fill_err:
                             logger.warning("LinkedIn: could not fill %r: %s", visible_field.label, fill_err)
 
@@ -332,8 +340,35 @@ class LinkedInAdapter:
 
 
 def _static_fallback() -> list[FormField]:
+    """Selectors used when extract_fields can't dynamically scrape the form.
+
+    The LinkedIn Easy Apply modal uses generated component IDs like
+    ``single-line-text-form-component-formElement-...``. Audit fix #4 — the
+    bare ``input[name='file']`` resume selector matched any unrelated upload
+    on the page; scope it to the modal and require an accept attribute that
+    looks like a resume upload.
+    """
     return [
-        FormField(label="Phone", field_type="text", required=False, selector="input[id*='phoneNumber']"),
-        FormField(label="Resume", field_type="file", required=True, selector="input[name='file']"),
-        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[id*='coverLetter']"),
+        FormField(
+            label="Phone", field_type="text", required=False,
+            selector=(
+                "div.jobs-easy-apply-modal "
+                "input[id^='single-line-text-form-component'][id*='phoneNumber'], "
+                "input[id*='phoneNumber']"
+            ),
+        ),
+        FormField(
+            label="Resume", field_type="file", required=True,
+            selector=(
+                "div.jobs-easy-apply-modal input[type='file'][accept*='pdf'], "
+                "input[type='file'][name='file']"
+            ),
+        ),
+        FormField(
+            label="Cover Letter", field_type="textarea", required=False,
+            selector=(
+                "div.jobs-easy-apply-modal textarea[id*='coverLetter'], "
+                "textarea[id*='coverLetter']"
+            ),
+        ),
     ]

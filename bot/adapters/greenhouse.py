@@ -13,6 +13,7 @@ from bot.human import (
     page_load_pause,
     read_pause,
 )
+from bot.adapters.base import FillFailed, assert_field_filled
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
 from bot.verify import (
@@ -172,6 +173,14 @@ class GreenhouseAdapter:
                                 await page.uncheck(field.selector)
                             submitted[field.label] = field.answer
                             await field_transition_pause()
+                        # Audit fix #4 — confirm the value actually landed in the
+                        # input. A stale selector silently no-ops; without this
+                        # check we'd submit a blank form.
+                        await assert_field_filled(page, field)
+                    except FillFailed:
+                        # Propagate so the outer handler turns it into an
+                        # ApplicationResult(success=False).
+                        raise
                     except Exception as fill_err:
                         logger.warning(
                             "Greenhouse: could not fill %r (%s): %s",
@@ -254,12 +263,40 @@ class GreenhouseAdapter:
 
 
 def _static_fallback() -> list[FormField]:
+    """Selectors used when extract_fields can't dynamically scrape the form.
+
+    Real Greenhouse forms (boards.greenhouse.io) use namespaced names like
+    ``job_application[first_name]``. Older or self-hosted variants use bare
+    ``#first_name``. Comma-separated CSS selectors let one fallback target
+    both layouts without an extra detection step. Audit fix #4.
+    """
     return [
-        FormField(label="First Name", field_type="text", required=True, selector="#first_name"),
-        FormField(label="Last Name", field_type="text", required=True, selector="#last_name"),
-        FormField(label="Email", field_type="text", required=True, selector="#email"),
-        FormField(label="Phone", field_type="text", required=True, selector="#phone"),
-        FormField(label="Resume", field_type="file", required=True, selector="input[name='resume']"),
-        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='cover_letter']"),
-        FormField(label="LinkedIn Profile", field_type="text", required=False, selector="input[id*='linkedin']"),
+        FormField(
+            label="First Name", field_type="text", required=True,
+            selector="input[name='job_application[first_name]'], #first_name",
+        ),
+        FormField(
+            label="Last Name", field_type="text", required=True,
+            selector="input[name='job_application[last_name]'], #last_name",
+        ),
+        FormField(
+            label="Email", field_type="text", required=True,
+            selector="input[name='job_application[email]'], #email",
+        ),
+        FormField(
+            label="Phone", field_type="text", required=True,
+            selector="input[name='job_application[phone]'], #phone",
+        ),
+        FormField(
+            label="Resume", field_type="file", required=True,
+            selector="input[type='file'][name='job_application[resume]'], input[name='resume']",
+        ),
+        FormField(
+            label="Cover Letter", field_type="textarea", required=False,
+            selector="textarea[name='job_application[cover_letter_text]'], textarea[name='cover_letter']",
+        ),
+        FormField(
+            label="LinkedIn Profile", field_type="text", required=False,
+            selector="input[id*='linkedin'], input[name*='linkedin']",
+        ),
     ]

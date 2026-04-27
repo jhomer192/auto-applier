@@ -12,6 +12,7 @@ from bot.human import (
     page_load_pause,
     read_pause,
 )
+from bot.adapters.base import FillFailed, assert_field_filled
 from bot.models import ApplicationResult, FormField, JobInfo
 from bot.scraper import extract_fields_from_page
 from bot.verify import (
@@ -200,6 +201,11 @@ class LeverAdapter:
                                 await page.uncheck(field.selector)
                             submitted[field.label] = field.answer
                             await field_transition_pause()
+                        # Audit fix #4 — verify the input actually has the value
+                        # so a stale selector can't sneak a blank submission past us.
+                        await assert_field_filled(page, field)
+                    except FillFailed:
+                        raise
                     except Exception as fill_err:
                         logger.warning(
                             "Lever: could not fill %r (%s): %s",
@@ -282,12 +288,26 @@ class LeverAdapter:
 
 
 def _static_fallback() -> list[FormField]:
+    """Selectors used when extract_fields can't dynamically scrape the form.
+
+    These mirror the layout of jobs.lever.co/{co}/{id}/apply pages. Each
+    selector is a comma-separated list so stale layouts still match. Audit
+    fix #4 — file inputs in particular needed both ``data-qa`` and the
+    plain ``name='resume'`` variant.
+    """
     return [
-        FormField(label="Full Name", field_type="text", required=True, selector="input[name='name']"),
-        FormField(label="Email", field_type="text", required=True, selector="input[name='email']"),
-        FormField(label="Phone", field_type="text", required=False, selector="input[name='phone']"),
-        FormField(label="Current Company", field_type="text", required=False, selector="input[name='org']"),
-        FormField(label="LinkedIn", field_type="text", required=False, selector="input[name='urls[LinkedIn]']"),
-        FormField(label="Resume", field_type="file", required=True, selector="input[data-qa='resume-upload-input']"),
-        FormField(label="Cover Letter", field_type="textarea", required=False, selector="textarea[name='comments']"),
+        FormField(label="Full Name", field_type="text", required=True,
+                  selector="input[name='name']"),
+        FormField(label="Email", field_type="text", required=True,
+                  selector="input[name='email'][type='email'], input[name='email']"),
+        FormField(label="Phone", field_type="text", required=False,
+                  selector="input[name='phone']"),
+        FormField(label="Current Company", field_type="text", required=False,
+                  selector="input[name='org']"),
+        FormField(label="LinkedIn", field_type="text", required=False,
+                  selector="input[name='urls[LinkedIn]'], input[name*='LinkedIn']"),
+        FormField(label="Resume", field_type="file", required=True,
+                  selector="input[data-qa='resume-upload-input'], input[type='file'][name='resume']"),
+        FormField(label="Cover Letter", field_type="textarea", required=False,
+                  selector="textarea[name='comments']"),
     ]
