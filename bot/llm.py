@@ -426,19 +426,32 @@ def _build_experience_context(profile: dict) -> str:
     lines = ["\nCANDIDATE EXPERIENCE LEVEL: Student / New Grad / Early Career"]
 
     if projects:
-        proj_summaries = [
-            f"{p['name']}: {p.get('outcome', p.get('description', ''))[:100]}"
-            for p in projects[:4]
-        ]
-        lines.append(f"Key projects: {'; '.join(proj_summaries)}")
+        proj_summaries = []
+        for p in projects[:4]:
+            name = (p.get("name") or "").strip()
+            if not name:
+                continue
+            detail = (p.get("outcome") or p.get("description") or "")[:100]
+            proj_summaries.append(f"{name}: {detail}" if detail else name)
+        if proj_summaries:
+            lines.append(f"Key projects: {'; '.join(proj_summaries)}")
 
     if certs:
-        cert_names = [c['name'] for c in certs[:5]]
-        lines.append(f"Certifications: {', '.join(cert_names)}")
+        cert_names = [(c.get("name") or "").strip() for c in certs[:5]]
+        cert_names = [n for n in cert_names if n]
+        if cert_names:
+            lines.append(f"Certifications: {', '.join(cert_names)}")
 
     if competitions:
-        comp_summaries = [f"{c['name']} ({c['result']})" for c in competitions[:4]]
-        lines.append(f"Competitions/Awards: {'; '.join(comp_summaries)}")
+        comp_summaries = []
+        for c in competitions[:4]:
+            name = (c.get("name") or "").strip()
+            if not name:
+                continue
+            result = (c.get("result") or "").strip()
+            comp_summaries.append(f"{name} ({result})" if result else name)
+        if comp_summaries:
+            lines.append(f"Competitions/Awards: {'; '.join(comp_summaries)}")
 
     lines.append(
         "\nINSTRUCTION: This candidate has limited work history. "
@@ -727,6 +740,7 @@ async def generate_cover_letter(
     job_analysis: JobAnalysis,
     profile: dict,
     voice_profile: dict | None = None,
+    news_items: list | None = None,
 ) -> str:
     """Generate a grounded, tailored cover letter. Never invents facts.
 
@@ -735,7 +749,8 @@ async def generate_cover_letter(
     by referencing what makes this particular role distinctive. When the profile
     includes an academic section, research experience is explicitly bridged to the
     industry role. When a voice_profile is supplied, the letter is written to match
-    the candidate's personal writing style.
+    the candidate's personal writing style. When news_items are supplied, the most
+    recent news item is injected as a hook for the opening paragraph.
 
     Args:
         job_analysis: Expanded analysis of the job posting including tone and keywords.
@@ -743,10 +758,14 @@ async def generate_cover_letter(
         voice_profile: Optional voice profile dict from extract_voice_profile.
             When provided, style instructions are injected into the prompt.
             Defaults to None (no style injection — backward-compatible).
+        news_items: Optional list of recent NewsItems for the company. When provided
+            and non-empty, the top item is injected as an opening-paragraph hook.
+            Defaults to None (no news injection — backward-compatible).
 
     Returns:
         A cover letter string of at most 3 paragraphs.
     """
+    from bot.news import get_news_hook_block
     safe_profile = _sanitize_profile(profile)
     profile_str = yaml.dump(safe_profile, default_flow_style=False)
     tailoring_context = _build_tailoring_context(job_analysis)
@@ -754,11 +773,18 @@ async def generate_cover_letter(
     experience_context = _build_experience_context(safe_profile)
     voice_block = _build_voice_block(voice_profile) if voice_profile else ""
 
+    news_block = ""
+    if news_items:
+        news_block = get_news_hook_block(news_items)
+        if news_block:
+            news_block = news_block + "\n\n"
+
     prompt = (
         f"{GROUNDING_CONSTRAINT}\n\n"
         f"{tailoring_context}\n"
         f"{academic_block}"
         f"{experience_context}"
+        f"{news_block}"
         f"PROFILE:\n{profile_str}\n\n"
         f"{voice_block}"
         "Write a cover letter for this role following these exact rules:\n"
