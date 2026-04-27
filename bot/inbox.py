@@ -47,25 +47,25 @@ _INTERVIEW_SIGNALS = [
     "we'd love", "we would love", "excited to", "pleased to",
 ]
 
-_REJECTION_SIGNALS = [
-    "unfortunately", "not moving forward", "will not be moving",
-    "other candidates", "not selected", "not a fit", "won't be moving",
-    "decided to", "position has been filled", "filled the position",
-    "not be continuing", "not be proceeding", "regret to inform",
-    "different direction", "not be able to move",
-]
-
-# Strong rejection: unambiguous multi-word phrases — fire on 1 hit anywhere
+# Strong rejection: unambiguous phrases. A single hit anywhere in subject+body
+# is enough to classify as a rejection regardless of other signals.
 _STRONG_REJECTION_SIGNALS = {
-    "not moving forward", "will not be moving", "other candidates",
-    "not selected", "not a fit", "won't be moving", "position has been filled",
-    "filled the position", "not be continuing", "not be proceeding",
+    "unfortunately we",
+    "not moving forward", "not be moving forward", "will not be moving",
+    "will not be", "won't be moving",
+    "other candidates", "not selected", "not a fit",
+    "position has been filled", "filled the position",
+    "not be continuing", "not be proceeding",
     "regret to inform", "not be able to move",
+    "different direction", "pursue other",
 }
 
-# Weak rejection: single words/short phrases that can appear in positive context
+# Weak rejection: short phrases that often appear in genuinely positive emails
+# ("Thank you for applying", "We've decided to schedule an interview").
+# These only fire as a rejection when no offer/interview/confirmation signal is
+# present — see the priority ordering in classify_email().
 _WEAK_REJECTION_SIGNALS = {
-    "unfortunately", "decided to", "different direction",
+    "unfortunately", "decided to", "thank you for",
 }
 
 _CONFIRMATION_SIGNALS = [
@@ -80,12 +80,20 @@ def classify_email(thread: EmailThread) -> str:
     """Classify an inbound email as one of:
       'offer', 'interview', 'rejection', 'confirmation', 'other'
 
-    Uses weighted keyword matching on subject + body preview. Fast, no LLM needed.
+    Uses keyword matching on subject + body preview. Fast, no LLM needed.
 
-    Thresholds prevent single-word false positives (e.g. "unfortunately your
-    interview went well" should NOT be classified as a rejection).
-
-    Priority order when tied: rejection > offer > interview > confirmation > other.
+    Priority:
+      1. Strong rejection phrases ("regret to inform", "other candidates", ...)
+         fire immediately — these are unambiguous.
+      2. Offer signals.
+      3. Interview signals — this comes BEFORE weak rejection so that
+         "We've decided to schedule an interview" classifies as interview, not
+         rejection. Weak words like "decided to" or "thank you for" routinely
+         appear in genuine interview / confirmation emails.
+      4. Confirmation signals.
+      5. Weak rejection signals only fire as a last resort, when nothing
+         positive was matched.
+      6. Otherwise: other.
     """
     subject_lower = thread.subject.lower()
     body_lower = thread.body_preview.lower()
@@ -95,29 +103,28 @@ def classify_email(thread: EmailThread) -> str:
     offer_hits = sum(1 for s in _OFFER_SIGNALS if s in text_full)
     interview_hits = sum(1 for s in _INTERVIEW_SIGNALS if s in text_full)
     confirmation_hits = sum(1 for s in _CONFIRMATION_SIGNALS if s in text_full)
-
-    # Rejection: strong unambiguous phrases fire on 1 hit anywhere;
-    # weak ambiguous words ("unfortunately") require a hit in the subject
-    # (subject is far more reliable) or 2+ hits total across subject + body.
     strong_rejection = any(s in text_full for s in _STRONG_REJECTION_SIGNALS)
-    rejection_in_subject = any(s in subject_lower for s in _REJECTION_SIGNALS)
-    weak_rejection_hits = sum(1 for s in _WEAK_REJECTION_SIGNALS if s in text_full)
-    if strong_rejection or rejection_in_subject or weak_rejection_hits >= 2:
-        return "rejection"
+    weak_rejection = any(s in text_full for s in _WEAK_REJECTION_SIGNALS)
 
-    # Offer requires 1+ specific hit (offer signals are quite specific)
-    if offer_hits >= 1:
-        return "offer"
+    if strong_rejection:
+        result = "rejection"
+    elif offer_hits >= 1:
+        result = "offer"
+    elif interview_hits >= 1:
+        result = "interview"
+    elif confirmation_hits >= 1:
+        result = "confirmation"
+    elif weak_rejection:
+        result = "rejection"
+    else:
+        result = "other"
 
-    # Interview requires 1+ hit (most interview signals are fairly specific)
-    if interview_hits >= 1:
-        return "interview"
-
-    # Automated confirmation
-    if confirmation_hits >= 1:
-        return "confirmation"
-
-    return "other"
+    logger.info(
+        "inbox.classify subject=%r → %s (strong=%s weak=%s offer=%d interview=%d confirm=%d)",
+        thread.subject, result, strong_rejection, weak_rejection,
+        offer_hits, interview_hits, confirmation_hits,
+    )
+    return result
 
 
 # ── Header / body helpers ─────────────────────────────────────────────────────

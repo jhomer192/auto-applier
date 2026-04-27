@@ -162,6 +162,61 @@ def test_two_interview_signals_classify_as_interview():
     assert classify_email(email) == "interview"
 
 
+# ── audit fix #5: weak rejection words must not override interview signals ────
+
+@pytest.mark.parametrize("subject,body", [
+    # The motivating audit case
+    ("We decided to schedule an interview", ""),
+    ("We've decided to invite you to interview", ""),
+    ("Thank you for your time — let's schedule a phone screen", ""),
+    ("Thank you for applying", "We'd like to invite you to a technical screen"),
+    # Weak rejection word in body, interview signal in subject
+    ("Phone screen invitation", "Decided to fast-track you to onsite"),
+])
+def test_weak_rejection_loses_to_interview_signal(subject, body):
+    """A weak rejection token alongside an interview signal must classify as interview."""
+    assert classify_email(_make(subject, body)) == "interview"
+
+
+@pytest.mark.parametrize("subject,body", [
+    ("We decided to extend you an offer", "compensation package details to follow"),
+    ("Thank you for your patience", "We'd like to extend an offer of employment"),
+])
+def test_weak_rejection_loses_to_offer(subject, body):
+    """Weak rejection words must not override an explicit offer."""
+    assert classify_email(_make(subject, body)) == "offer"
+
+
+@pytest.mark.parametrize("subject,body", [
+    ("Thank you for applying", "We received your application and will be in touch"),
+    ("Thank you for your interest", "Your application has been successfully submitted"),
+])
+def test_weak_rejection_loses_to_confirmation(subject, body):
+    """'thank you for' in confirmation emails must classify as confirmation."""
+    assert classify_email(_make(subject, body)) == "confirmation"
+
+
+@pytest.mark.parametrize("subject,body", [
+    # Strong unambiguous phrases — classify as rejection regardless of context
+    ("Update", "We regret to inform you of our decision"),
+    ("Update", "We have decided to pursue other candidates"),
+    ("Update", "We will not be moving forward at this time"),
+    ("Update", "We're heading in a different direction"),
+    ("Unfortunately we have decided to schedule with another candidate", ""),
+])
+def test_strong_rejection_always_wins(subject, body):
+    assert classify_email(_make(subject, body)) == "rejection"
+
+
+def test_weak_rejection_alone_still_classifies_rejection():
+    """When NOTHING positive matches, a lone weak rejection word still tags as rejection.
+
+    Otherwise an "Unfortunately, we've moved on" email would silently become 'other'.
+    """
+    email = _make("Quick update", "Unfortunately we've already moved on internally.")
+    assert classify_email(email) == "rejection"
+
+
 # ── Message-ID header in outbound replies ────────────────────────────────────
 
 def test_send_reply_includes_message_id():
