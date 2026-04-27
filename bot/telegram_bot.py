@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -67,6 +68,68 @@ SUPPORTED_PATTERNS = [
 
 def _is_job_url(text: str) -> bool:
     return any(re.search(p, text) for p in SUPPORTED_PATTERNS)
+
+
+# Telegram has a hard limit of 4096 chars per message. Resumes, cover letters,
+# audit reports, and LLM-composed emails routinely exceed this and cause
+# `BadRequest: Message is too long`, killing the handler silently.
+TELEGRAM_MAX_CHARS = 4096
+_CHUNK_SAFETY_MARGIN = 96  # leave room for "(part N/M)\n\n" prefix
+
+
+def _split_for_telegram(text: str, limit: int = TELEGRAM_MAX_CHARS - _CHUNK_SAFETY_MARGIN) -> list[str]:
+    """Split `text` into chunks no larger than `limit`, preferring paragraph then line breaks.
+
+    Falls back to a hard character cut only if no break is found in the chunk window.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        # Prefer paragraph break, then line break, then word break, then hard cut.
+        for sep in ("\n\n", "\n", " "):
+            cut = window.rfind(sep)
+            if cut > limit // 2:  # only use the break if it's reasonably late in the window
+                chunks.append(remaining[:cut])
+                remaining = remaining[cut + len(sep):]
+                break
+        else:
+            chunks.append(remaining[:limit])
+            remaining = remaining[limit:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def reply_chunked(message, text: str, parse_mode: str | None = None) -> None:
+    """Send `text` as one or more Telegram replies, splitting safely under the 4096 limit.
+
+    For multi-chunk sends, prepends "(part N/M)\\n\\n" to each chunk so the user
+    knows the message is continued. Markdown parse_mode is preserved per-chunk.
+    """
+    chunks = _split_for_telegram(text)
+    if len(chunks) == 1:
+        await message.reply_text(chunks[0], parse_mode=parse_mode)
+        return
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        prefix = f"(part {i}/{total})\n\n"
+        await message.reply_text(prefix + chunk, parse_mode=parse_mode)
+
+
+async def send_chunked(bot, chat_id: int, text: str, parse_mode: str | None = None) -> None:
+    """Same as `reply_chunked` but for background tasks that have a Bot + chat_id, not a message."""
+    chunks = _split_for_telegram(text)
+    if len(chunks) == 1:
+        await bot.send_message(chat_id=chat_id, text=chunks[0], parse_mode=parse_mode)
+        return
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        prefix = f"(part {i}/{total})\n\n"
+        await bot.send_message(chat_id=chat_id, text=prefix + chunk, parse_mode=parse_mode)
 
 
 class AutoApplierBot:
@@ -570,7 +633,7 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     header = f"Tailored resume for [{app_id}] {record.title} @ {record.company}:\n\n"
-    await update.message.reply_text(header + record.tailored_resume)
+    await reply_chunked(update.message, header + record.tailored_resume)
 
 
 async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -603,7 +666,7 @@ async def cmd_coverletter(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
     header = f"Cover letter for [{app_id}] {record.title} @ {record.company}:\n\n"
-    await update.message.reply_text(header + record.cover_letter)
+    await reply_chunked(update.message, header + record.cover_letter)
 
 
 async def cmd_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -649,7 +712,7 @@ async def cmd_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if candidate.draft_message:
             lines.append(f"   Draft: {candidate.draft_message}")
 
-    await update.message.reply_text("\n".join(lines))
+    await reply_chunked(update.message, "\n".join(lines))
 
 
 async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1149,6 +1212,14 @@ async def _handle_job_url(
     # Load voice profile once for all LLM calls in this flow
     voice_profile = load_voice_profile()
 
+    # Fetch company news for cover letter hook
+    from bot.news import fetch_company_news
+    news_items = []
+    try:
+        news_items = await asyncio.wait_for(fetch_company_news(job_info.company), timeout=8.0)
+    except Exception:
+        pass
+
     # Generate tailored materials
     tailored_resume_text = ""
     cover_letter_text = ""
@@ -1157,7 +1228,9 @@ async def _handle_job_url(
     except LLMError as e:
         logger.warning("tailor_resume failed: %s", e)
     try:
-        cover_letter_text = await generate_cover_letter(job_analysis, profile, voice_profile=voice_profile)
+        cover_letter_text = await generate_cover_letter(
+            job_analysis, profile, voice_profile=voice_profile, news_items=news_items
+        )
     except LLMError as e:
         logger.warning("generate_cover_letter failed: %s", e)
 
@@ -1381,7 +1454,7 @@ async def _handle_email_reply(
             body=body,
         )
         # Echo what was sent so the user knows exactly what went out
-        await update.message.reply_text(f"Sent to {thread.from_address}:\n\n{body}")
+        await reply_chunked(update.message, f"Sent to {thread.from_address}:\n\n{body}")
     except Exception as e:
         logger.error("Failed to send email reply: %s", e)
         await update.message.reply_text(f"Failed to send reply: {e}")
@@ -1562,9 +1635,10 @@ async def notify_new_emails(app: Application) -> None:
                         context_text += f"\nCover letter sent:\n{app_record.cover_letter[:800]}"
 
                     prep = await generate_interview_prep(company, title, context_text)
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=f"📚 Interview prep — {title} at {company}:\n\n{prep}",
+                    await send_chunked(
+                        bot,
+                        chat_id,
+                        f"📚 Interview prep — {title} at {company}:\n\n{prep}",
                     )
                 except Exception as prep_err:
                     logger.warning("notify_new_emails: interview prep failed: %s", prep_err)
@@ -2191,8 +2265,10 @@ async def cmd_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    # Send as plain text — LLM-generated suggestions/verdicts can contain stray
+    # `_`, `*`, or backticks that would crash Markdown parsing with BadRequest.
     formatted = format_audit_report(report)
-    await update.message.reply_text(formatted, parse_mode="Markdown")
+    await reply_chunked(update.message, formatted)
 
 
 # ---------------------------------------------------------------------------
