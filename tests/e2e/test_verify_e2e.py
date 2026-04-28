@@ -1,21 +1,21 @@
 """E2E tests for bot/verify.py — detection functions in a real Chromium browser.
 
-Covers all three verification stages:
+Covers the browser-driven verification stages:
   Stage 1: detect_job_closed, detect_already_applied, detect_captcha
-  Stage 2: scan_form_errors, missing_required_fields
+  Stage 2: scan_form_errors
   Stage 3: detect_submission_result
+
+The pure-logic helpers (missing_required_fields, classify_missing) live in
+tests/unit/test_verify_logic.py — they don't need Chromium.
 """
 import pytest
 from bot.verify import (
-    classify_missing,
     detect_already_applied,
     detect_captcha,
     detect_job_closed,
     detect_submission_result,
-    missing_required_fields,
     scan_form_errors,
 )
-from bot.models import FormField
 
 pytestmark = pytest.mark.asyncio
 
@@ -139,55 +139,3 @@ async def test_submission_result_error_on_error_page(http_server, page):
     assert outcome in ("error", "unknown")
 
 
-# ── missing_required_fields (pure logic — no browser needed) ─────────────────
-
-def _field(label, required=True, answer="filled"):
-    return FormField(label=label, field_type="text", required=required,
-                     selector=f"#{label}", answer=answer)
-
-
-def test_missing_required_when_not_submitted():
-    """Required field with an answer that never appeared in submitted_fields is flagged."""
-    fields = [_field("Email"), _field("Phone", required=False)]
-    submitted = {}
-    missing = missing_required_fields(fields, submitted)
-    assert "Email" in missing
-
-
-def test_no_missing_when_all_required_submitted():
-    fields = [_field("Email"), _field("Name")]
-    submitted = {"Email": "a@b.com", "Name": "Alice"}
-    missing = missing_required_fields(fields, submitted)
-    assert missing == []
-
-
-def test_optional_fields_not_in_missing():
-    fields = [_field("Email"), _field("Cover Letter", required=False)]
-    submitted = {"Email": "a@b.com"}
-    missing = missing_required_fields(fields, submitted)
-    assert "Cover Letter" not in missing
-
-
-def test_missing_unanswered_required_not_flagged():
-    """Required fields with no answer are not flagged — they were never fillable."""
-    fields = [_field("Email", answer=None), _field("Name", answer="")]
-    submitted = {}
-    missing = missing_required_fields(fields, submitted)
-    assert missing == []
-
-
-def test_classify_missing_blocks_on_email():
-    blocking, warnings = classify_missing(["Email", "LinkedIn"])
-    assert "Email" in blocking
-    assert "LinkedIn" in warnings
-
-
-def test_classify_missing_blocks_on_resume():
-    blocking, _ = classify_missing(["Resume", "Phone"])
-    assert "Resume" in blocking
-
-
-def test_classify_missing_empty_is_empty():
-    blocking, warnings = classify_missing([])
-    assert blocking == []
-    assert warnings == []
