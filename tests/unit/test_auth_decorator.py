@@ -112,7 +112,7 @@ GATED_HANDLERS = [
     "cmd_start", "cmd_help", "cmd_status", "cmd_history", "cmd_cancel",
     "handle_text", "cmd_search", "cmd_resume", "cmd_coverletter",
     "cmd_referrals", "cmd_prefs", "cmd_voice", "cmd_profile", "cmd_queue",
-    "cmd_report", "cmd_sources", "cmd_handshake", "cmd_scams",
+    "cmd_report", "cmd_failed", "cmd_sources", "cmd_handshake", "cmd_scams",
     "cmd_scam_apply", "cmd_force", "cmd_linkedin", "cmd_website",
 ]
 

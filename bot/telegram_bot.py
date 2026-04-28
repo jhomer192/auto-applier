@@ -185,6 +185,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("prefs", cmd_prefs))
         app.add_handler(CommandHandler("queue", cmd_queue))
         app.add_handler(CommandHandler("report", cmd_report))
+        app.add_handler(CommandHandler("failed", cmd_failed))
         app.add_handler(CommandHandler("linkedin", cmd_linkedin))
         app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(CommandHandler("sources", cmd_sources))
@@ -300,7 +301,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/force <url> \u2014 process a URL that was blocked by scam detector\n"
         "/sources \u2014 show active discovery sources (GitHub repos, company boards)\n"
         "/handshake \u2014 Handshake connection status and setup\n"
-        "/report \u2014 stats (today / week / all-time) + queue size\n\n"
+        "/report \u2014 stats (today / week / all-time) + queue size\n"
+        "/failed \u2014 list failed jobs with last error and retry status\n\n"
 
         "── Application history ──\n"
         "/status \u2014 application counts by status\n"
@@ -1839,7 +1841,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 suffix_parts.append(f"{retryable_failed} failed (will retry)")
             if permanent_failed:
                 suffix_parts.append(f"{permanent_failed} failed permanently")
-            suffix = "\n\n" + ", ".join(suffix_parts) + "."
+            suffix = "\n\n" + ", ".join(suffix_parts) + ".  /failed for details."
         await update.message.reply_text(
             "Job queue is empty.\n\n"
             "Add saved searches with /search add <query> [location] — "
@@ -1908,6 +1910,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             lines.append(f"  retryable: {retryable_failed}  (will be re-queued automatically)")
         if permanent_failed:
             lines.append(f"  permanent: {permanent_failed}  (3+ attempts, no further retry)")
+        lines.append("  /failed to inspect")
 
     if top_companies:
         lines.append("\nTop companies applied to:")
@@ -1915,6 +1918,82 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             lines.append(f"  {company} ({count})")
 
     await update.message.reply_text("\n".join(lines))
+
+
+@requires_auth
+async def cmd_failed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show jobs that failed to submit, with last error and retry status.
+
+    /failed — list every failed queued job. The /report and /queue commands
+    only show counts; this gives a per-job view so you can spot patterns
+    (e.g. one company breaking, all LinkedIn flows failing) and decide
+    whether to investigate manually before the next retry.
+    """
+    db: ApplicationDB = context.bot_data["db"]
+    failed_jobs = await db.get_failed_jobs()
+
+    if not failed_jobs:
+        await update.message.reply_text("No failed jobs.")
+        return
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    lines = [f"Failed jobs ({len(failed_jobs)}):\n"]
+
+    # Same retry config as auto_apply.retry_eligible_failed_jobs (1h cooldown, 3 attempts).
+    # Hardcoded here because the values are not configurable; if that ever changes,
+    # pull them from a single source rather than letting them drift.
+    cooldown_hours = 1
+    max_attempts = 3
+
+    for i, job in enumerate(failed_jobs[:20], 1):
+        retry_status = _failed_retry_status(
+            job, now, cooldown_hours=cooldown_hours, max_attempts=max_attempts,
+        )
+        err_preview = (job.last_error or "—").strip().replace("\n", " ")
+        if len(err_preview) > 120:
+            err_preview = err_preview[:117] + "..."
+
+        lines.append(f"{i}. {job.title} @ {job.company}")
+        lines.append(f"   attempts: {job.attempts}/{max_attempts} — {retry_status}")
+        lines.append(f"   error: {err_preview}")
+        lines.append(f"   {job.url}")
+        lines.append("")
+
+    if len(failed_jobs) > 20:
+        lines.append(f"...and {len(failed_jobs) - 20} more.")
+
+    await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
+
+
+def _failed_retry_status(
+    job: "QueuedJob",
+    now: "datetime",
+    *,
+    cooldown_hours: int = 1,
+    max_attempts: int = 3,
+) -> str:
+    """Render a one-phrase 'when does this retry?' label for a failed job."""
+    from datetime import timedelta
+    if job.attempts >= max_attempts:
+        return "permanent (no further retries)"
+    if not job.last_attempted_at:
+        return "ready for retry now"
+    try:
+        last = datetime.fromisoformat(job.last_attempted_at)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "ready for retry now"
+    next_retry = last + timedelta(hours=cooldown_hours)
+    if next_retry <= now:
+        return "ready for retry now"
+    delta = next_retry - now
+    minutes = max(1, int(delta.total_seconds() // 60))
+    if minutes < 60:
+        return f"retry in ~{minutes}m"
+    hours = minutes / 60
+    return f"retry in ~{hours:.1f}h"
 
 
 @requires_auth
