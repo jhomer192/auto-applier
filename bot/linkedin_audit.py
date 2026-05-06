@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from bot import captcha
 from bot.llm import claude_call, LLMError
 from bot.human import launch_stealth_context, page_load_pause, read_pause, human_scroll
 
@@ -72,6 +73,8 @@ async def fetch_linkedin_profile_html(profile_url: str, auth_state_path: str) ->
         try:
             await page.goto(profile_url, wait_until="domcontentloaded")
             await page_load_pause()
+            if not await captcha.handle(page, context_label=f"LinkedIn audit: {profile_url}"):
+                raise RuntimeError("CAPTCHA blocked LinkedIn profile load — see /captcha")
             await human_scroll(page)
             await read_pause(500)
             # Scroll a second time to trigger lazy-loaded sections

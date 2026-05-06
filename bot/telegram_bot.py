@@ -189,6 +189,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("linkedin", cmd_linkedin))
         app.add_handler(CommandHandler("website", cmd_website))
         app.add_handler(CommandHandler("sources", cmd_sources))
+        app.add_handler(CommandHandler("captcha", cmd_captcha))
         app.add_handler(CommandHandler("handshake", cmd_handshake))
         app.add_handler(CommandHandler("referrals", cmd_referrals))
         app.add_handler(CommandHandler("scams", cmd_scams))
@@ -564,6 +565,10 @@ async def _handle_conversational(
         await update.message.reply_text(reply)
 
 
+_CODE_PATTERN = re.compile(r"^\s*code\s+([A-Za-z0-9]{4,12})\s*$", re.IGNORECASE)
+LINKEDIN_2FA_CODE_FILE = "data/linkedin_2fa_code.txt"
+
+
 @requires_auth
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
@@ -571,6 +576,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     db: ApplicationDB = context.bot_data["db"]
     profile: dict = context.bot_data["profile"]
     registry: AdapterRegistry = context.bot_data["registry"]
+
+    # Case 0: out-of-band 2FA code drop-off for setup/linkedin_login.py.
+    # The login script polls for this file and picks it up.
+    m = _CODE_PATTERN.match(text)
+    if m:
+        try:
+            Path("data").mkdir(exist_ok=True)
+            Path(LINKEDIN_2FA_CODE_FILE).write_text(m.group(1).strip())
+            await update.message.reply_text("Got the code. Forwarded to the login script.")
+        except Exception as e:
+            logger.error("2fa code dropoff failed: %s", e)
+            await update.message.reply_text("Got the code but couldn't save it. Check logs.")
+        return
 
     # Case 1a: waiting for a recruiter email reply from the user
     # (stored as a queue in bot_data because background tasks can't access user_data)
@@ -2145,6 +2163,42 @@ def _failed_retry_status(
 
 
 @requires_auth
+@requires_auth
+async def cmd_captcha(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show CAPTCHA telemetry from data/captcha_log.jsonl.
+
+    /captcha            — last 7 days of hits, broken out by kind
+    /captcha 30         — last 30 days
+    """
+    from bot import captcha as _captcha
+
+    args = context.args or []
+    days = 7
+    if args:
+        try:
+            days = max(1, min(int(args[0]), 365))
+        except ValueError:
+            await update.message.reply_text("Usage: /captcha [days]  (default 7)")
+            return
+
+    s = _captcha.stats(days=days)
+    if s["total"] == 0:
+        await update.message.reply_text(
+            f"No CAPTCHA hits in the last {days} day(s). "
+            "(That's good — Layer-0 stealth + persistent session is working.)"
+        )
+        return
+
+    lines = [f"CAPTCHA hits in the last {days} day(s): {s['total']}"]
+    for kind, count in sorted(s["by_kind"].items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {kind}: {count}")
+    lines.append(
+        "\nLayer-1 only — every hit is logged + screenshotted; no auto-solving yet. "
+        "See .claude/tasks/captcha-solver.md for the build roadmap."
+    )
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show active job discovery sources and their configuration.
 

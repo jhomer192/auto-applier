@@ -6,6 +6,7 @@ Uses human.py helpers for realistic timing and browser fingerprinting.
 import logging
 import urllib.parse
 
+from bot import captcha
 from bot.human import human_scroll, jitter_pause, launch_stealth_context, page_load_pause
 from bot.models import SavedSearch, SearchResult
 
@@ -57,6 +58,9 @@ async def search_linkedin(
             try:
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                 await page_load_pause()
+
+                if not await captcha.handle(page, context_label=f"LinkedIn search: {search.query!r}"):
+                    return []
 
                 # Scroll to load lazy-loaded job cards
                 await human_scroll(page, pixels=400)
