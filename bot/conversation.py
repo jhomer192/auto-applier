@@ -44,9 +44,10 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-MAX_INNER_ITERS = 3
-HISTORY_LIMIT = 40                  # rows pulled from conversation_messages per turn
-HISTORY_RENDER_CHAR_BUDGET = 8000   # cap on the rendered transcript section
+MAX_INNER_ITERS = 25                # effectively unlimited; wall-clock is the real bound
+TURN_WALLCLOCK_BUDGET_SEC = 300     # 5 min hard limit per user turn (LLM cost + UX)
+HISTORY_LIMIT = 60                  # rows pulled from conversation_messages per turn
+HISTORY_RENDER_CHAR_BUDGET = 12000  # cap on the rendered transcript section
 LESSONS_PATH = "data/lessons.jsonl"
 LESSONS_FIFO_CAP = 1000             # trim the file to most-recent N entries
 LESSONS_PRELOAD_LIMIT = 30          # how many lessons to splice into system prompt
@@ -611,8 +612,15 @@ async def run_conversation_turn(
     try:
         await _append_conversation(db, chat_id, "user", user_text)
         keepalive = asyncio.create_task(_typing_keepalive(context.bot, chat_id))
+        turn_started = time.time()
 
         for it in range(MAX_INNER_ITERS):
+            if time.time() - turn_started > TURN_WALLCLOCK_BUDGET_SEC:
+                logger.info("conversation: wall-clock budget hit at iter %d", it)
+                if not final_reply:
+                    final_reply = ("I took a lot of actions but ran out of time on this turn — "
+                                   "tell me to keep going if you want more.")
+                break
             history = await _get_recent_conversation(db, chat_id)
             lessons = _load_lessons()
             prompt = _build_prompt(history, lessons)

@@ -2083,16 +2083,15 @@ async def _handle_batch_response(
                 if 0 <= idx < len(batch):
                     indices.append(idx)
         if not indices:
-            # Natural-language fallback: ask Claude to pick which jobs in the
-            # batch match the user's intent (e.g. "all non-manager jobs").
-            indices = await _resolve_batch_indices_via_llm(text, batch)
-            if not indices:
-                await update.message.reply_text(
-                    "I couldn't pick jobs from that. Reply with numbers (e.g. 1,3), "
-                    "'all', or 'skip all'. You can also describe what to apply to "
-                    "in plain English (e.g. 'all non-manager roles')."
-                )
-                return
+            # Natural-language → conversation runtime. The runtime has
+            # list_queue / investigate_jobs / dismiss_jobs / update_pref
+            # tools and full chat history, so a message like "skip the
+            # manager ones, investigate the rest, also add SWE to my roles"
+            # gets fully composed in one turn instead of failing out here.
+            # PENDING_BATCH is cleared so the runtime owns the response.
+            context.bot_data.pop(PENDING_BATCH, None)
+            await run_conversation_turn(update, context, text)
+            return
         selected = [batch[i] for i in indices]
 
     # Dismiss all non-selected pending jobs
