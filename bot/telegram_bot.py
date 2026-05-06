@@ -17,7 +17,10 @@ from telegram.ext import (
     filters,
 )
 
+from typing import Optional
+
 from bot.adapters import AdapterRegistry
+from bot.conversation import run_conversation_turn
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
@@ -566,8 +569,49 @@ async def _handle_conversational(
         await update.message.reply_text(reply)
 
 
-_CODE_PATTERN = re.compile(r"^\s*code\s+([A-Za-z0-9]{4,12})\s*$", re.IGNORECASE)
+_CODE_EXPLICIT = re.compile(r"^\s*code\s+([A-Za-z0-9]{4,12})\s*$", re.IGNORECASE)
+_CODE_CONTEXT = re.compile(
+    r"(?:verification|security|2fa|two[- ]factor|linkedin|login)\s*code\D{0,30}(\d{4,8})",
+    re.IGNORECASE,
+)
+_CODE_BARE = re.compile(r"\b(\d{6})\b")
+_2FA_CONTEXT_WORDS = (
+    "verification", "linkedin", "2fa", "login",
+    "auth code", "security code", "your code", "the code",
+)
 LINKEDIN_2FA_CODE_FILE = "data/linkedin_2fa_code.txt"
+
+
+def extract_2fa_code(text: str) -> Optional[str]:
+    """Pull a 2FA code out of a user's message.
+
+    Three rules, in order, with length-gating so legitimate short verification
+    messages are caught and pasted job postings (which are long and full of
+    digits) are not:
+
+    1. Explicit ``code 752138`` at message start (any length OK).
+    2. ``... verification code ... 752138`` with the digits within 30 chars
+       of the keyword AND total message length < 200 chars.
+    3. Plain ``752138`` only when the message is < 80 chars AND contains a
+       2FA-context word.
+    """
+    if not text:
+        return None
+    text = text.strip()
+    m = _CODE_EXPLICIT.match(text)
+    if m:
+        return m.group(1)
+    if len(text) < 200:
+        m = _CODE_CONTEXT.search(text)
+        if m:
+            return m.group(1)
+    if len(text) < 80:
+        lowered = text.lower()
+        if any(w in lowered for w in _2FA_CONTEXT_WORDS):
+            m = _CODE_BARE.search(text)
+            if m:
+                return m.group(1)
+    return None
 LINKEDIN_AUTH_STATE_FILE = "data/linkedin_auth.json"
 
 
@@ -670,12 +714,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     registry: AdapterRegistry = context.bot_data["registry"]
 
     # Case 0a: out-of-band 2FA code drop-off for setup/linkedin_login.py.
-    m = _CODE_PATTERN.match(text)
-    if m:
+    # Catches both "code 752138" and forwarded LinkedIn-style messages like
+    # "Your LinkedIn verification code is 752138.". Length-gated to avoid
+    # capturing 6-digit numbers from pasted job postings.
+    code = extract_2fa_code(text)
+    if code:
         try:
             Path("data").mkdir(exist_ok=True)
-            Path(LINKEDIN_2FA_CODE_FILE).write_text(m.group(1).strip())
-            await update.message.reply_text("Got the code. Forwarded to the login script.")
+            Path(LINKEDIN_2FA_CODE_FILE).write_text(code)
+            await update.message.reply_text(f"Got code {code}. Forwarded to the login script.")
         except Exception as e:
             logger.error("2fa code dropoff failed: %s", e)
             await update.message.reply_text("Got the code but couldn't save it. Check logs.")
@@ -743,8 +790,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _handle_job_url(update, context, text)
         return
 
-    # Case 4: unrecognized — use Claude to understand intent and guide them
-    await _handle_conversational(update, context, text)
+    # Case 4: freeform message — multi-turn Claude-with-tools runtime.
+    # The bot has persistent per-chat history, can compose multiple actions
+    # per turn, and records lessons that survive across conversations.
+    # Falls back to the legacy one-shot intent parser only on fatal error.
+    try:
+        await run_conversation_turn(update, context, text)
+    except Exception:
+        logger.exception("conversation runtime crashed; falling back to legacy")
+        await _handle_conversational(update, context, text)
 
 
 @requires_auth
