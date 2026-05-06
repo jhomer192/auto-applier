@@ -297,6 +297,77 @@ async def _tool_recall_lessons(context: ContextTypes.DEFAULT_TYPE, args: dict) -
     return {"count": len(lessons[-limit:]), "lessons": lessons[-limit:]}
 
 
+# ── General-purpose tools (parity with claude-bot's tool surface) ───────────
+
+async def _tool_webfetch(context: ContextTypes.DEFAULT_TYPE, args: dict) -> dict:
+    """Fetch a URL. Returns status + first ~8KB of body. Use for job postings,
+    company pages, recruiter LinkedIn profiles, etc."""
+    import aiohttp as _aiohttp
+    url = (args.get("url") or "").strip()
+    if not url:
+        return {"error": "url is required"}
+    if not url.startswith(("http://", "https://")):
+        return {"error": "url must be http(s)"}
+    try:
+        async with _aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=30, headers={
+                "User-Agent": "Mozilla/5.0 (auto-applier)"
+            }) as r:
+                text = await r.text(errors="replace")
+                return {"status": r.status, "url": url, "length": len(text),
+                        "content": text[:8000]}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _tool_read(context: ContextTypes.DEFAULT_TYPE, args: dict) -> dict:
+    """Read a file from disk. Returns first ~8KB of content."""
+    path = (args.get("file_path") or args.get("path") or "").strip()
+    if not path:
+        return {"error": "file_path is required"}
+    try:
+        p = Path(path)
+        if not p.exists():
+            return {"error": f"no such file: {path}"}
+        if p.is_dir():
+            return {"error": f"{path} is a directory"}
+        if p.stat().st_size > 1_000_000:
+            return {"error": f"{path} too large (>{1_000_000} bytes)"}
+        content = p.read_text(errors="replace")
+        return {"path": str(p), "size": len(content), "content": content[:8000]}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _tool_bash(context: ContextTypes.DEFAULT_TYPE, args: dict) -> dict:
+    """Run an arbitrary shell command. 60s timeout. Output capped at 8KB stdout / 2KB stderr."""
+    cmd = (args.get("command") or "").strip()
+    if not cmd:
+        return {"error": "command is required"}
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd="/root/auto-applier",
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"error": "command timed out after 60s", "command": cmd}
+        return {
+            "exit_code": proc.returncode,
+            "stdout": stdout_b.decode("utf-8", errors="replace")[:8000],
+            "stderr": stderr_b.decode("utf-8", errors="replace")[:2000],
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 # Tool registry: name → (one-line description, JSON-schema args, async fn)
 TOOLS: dict[str, dict] = {
     "list_queue": {
@@ -362,6 +433,29 @@ TOOLS: dict[str, dict] = {
         "description": "Search recorded lessons by substring. Usually unnecessary — top lessons are pre-loaded into your context.",
         "args": {"query": "string (optional)", "limit": "int, default 30"},
         "fn": _tool_recall_lessons,
+    },
+    # ─ general-purpose (matches claude-bot's tool names so emoji / styling
+    #   map cleanly) ──────────────────────────────────────────────────────
+    "WebFetch": {
+        "description": ("Fetch a URL via HTTP GET. Use to look at the actual "
+                        "job posting page, company about pages, recruiter "
+                        "profiles, etc. Returns first ~8KB of body."),
+        "args": {"url": "string (http or https)"},
+        "fn": _tool_webfetch,
+    },
+    "Read": {
+        "description": ("Read a file from the auto-applier filesystem. Useful "
+                        "for inspecting profile.yaml, lessons.jsonl, "
+                        "applications.db queries, recent screenshots, etc."),
+        "args": {"file_path": "string"},
+        "fn": _tool_read,
+    },
+    "Bash": {
+        "description": ("Run an arbitrary shell command from the auto-applier "
+                        "repo root. 60s timeout. Use sparingly — the bot runs "
+                        "as root on the VPS."),
+        "args": {"command": "string"},
+        "fn": _tool_bash,
     },
 }
 
@@ -511,6 +605,12 @@ ONE concise reply.
 When the user reveals a lasting preference ("never crypto", "Series A only",
 "always remote"), call record_lesson so you remember it permanently. Don't
 record one-off opinions — only durable rules.
+
+You also have general-purpose tools — WebFetch, Read, Bash — for cases the
+domain tools don't cover. WebFetch a job posting URL to read the description
+yourself before deciding. Read profile.yaml or lessons.jsonl to recall facts.
+Bash for anything else (queries, scripts). Use them when they actually help;
+don't reach for Bash when a domain tool fits.
 
 # Output format
 
@@ -666,8 +766,131 @@ async def _typing_keepalive(bot, chat_id: int) -> None:
 
 # ── Live status / tool-call visibility ──────────────────────────────────────
 
+def _tool_emoji(name: str, args: dict) -> str:
+    """Per-tool emoji prefix.
+
+    Ported verbatim from claude-bot (/opt/claude-bot/src/telegram.ts:toolEmoji)
+    so the two bots share identical iconography for any built-in / MCP tools
+    they have in common. Auto-applier's domain-specific tools (list_queue,
+    update_pref, etc.) get their own mappings appended below.
+    """
+    if not isinstance(args, dict):
+        args = {}
+    # Built-in claude tools (verbatim from claude-bot's switch)
+    if name == "Bash":
+        cmd = args.get("command")
+        if isinstance(cmd, str) and re.match(r"^\s*gh(\s|$)", cmd):
+            return "🐙"
+        return "💻"
+    if name == "Read":
+        return "📖"
+    if name in ("Write", "Edit"):
+        return "✏️"
+    if name in ("Glob", "Grep"):
+        return "🔎"
+    if name == "WebFetch":
+        return "🌐"
+    if name == "WebSearch":
+        return "🔍"
+    if name == "Task":
+        return "🧙"
+    if name == "TodoWrite":
+        return "📋"
+    if name == "AskUserQuestion":
+        return "❓"
+    if name.startswith("mcp__playwright__"):
+        return "🎭"
+    if name.startswith("mcp__github__"):
+        return "🐙"
+    if name.startswith("mcp__"):
+        return "🔌"
+    # Auto-applier domain tools
+    if name in ("list_queue", "list_searches", "get_application_history", "get_prefs"):
+        return "📖"
+    if name == "update_pref":
+        return "✏️"
+    if name == "dismiss_jobs":
+        return "🗑"
+    if name == "investigate_jobs":
+        return "🎯"
+    if name == "add_search":
+        return "➕"
+    if name == "remove_search":
+        return "➖"
+    if name == "record_lesson":
+        return "🧠"
+    if name == "recall_lessons":
+        return "🔖"
+    return "🤖"
+
+
+def _tool_input_preview(name: str, args: dict) -> str:
+    """Compact preview of the most relevant arg.
+
+    Ported from claude-bot (/opt/claude-bot/src/telegram.ts:previewToolInput)
+    plus auto-applier's domain tools.
+    """
+    if not isinstance(args, dict):
+        return ""
+    pick = lambda k: args[k] if isinstance(args.get(k), str) else ""
+    # Built-in claude tools
+    if name == "Bash":
+        return pick("command")
+    if name in ("Edit", "Write", "Read"):
+        return pick("file_path")
+    if name in ("Glob", "Grep"):
+        return pick("pattern")
+    if name in ("WebFetch", "WebSearch"):
+        return pick("url") or pick("query")
+    if name == "Task":
+        agent_type = pick("subagent_type")
+        desc = pick("description")
+        if agent_type and desc:
+            return f"{agent_type} — {desc}"
+        return desc or agent_type
+    if "browser_navigate" in name:
+        return pick("url")
+    if "browser_click" in name:
+        return pick("element") or pick("ref")
+    if "browser_type" in name or "browser_fill" in name:
+        return pick("text") or pick("element")
+    if "browser_evaluate" in name:
+        return pick("function")[:80]
+    # Auto-applier domain tools
+    if name == "update_pref":
+        key = args.get("key", "")
+        value = args.get("value", "")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        return f"{key}={value}" if key else str(value)
+    if name == "add_search":
+        q = args.get("query", "")
+        loc = args.get("location", "")
+        return f"{q} in {loc}" if loc else q
+    if name == "remove_search":
+        return str(args.get("id", ""))
+    if name == "dismiss_jobs":
+        if args.get("all"):
+            return "all"
+        ids = args.get("ids", [])
+        if isinstance(ids, list) and ids:
+            return f"{len(ids)} job{'s' if len(ids) != 1 else ''}"
+        return ""
+    if name == "investigate_jobs":
+        ids = args.get("ids", [])
+        if isinstance(ids, list):
+            return f"{len(ids)} job{'s' if len(ids) != 1 else ''}"
+        return ""
+    if name in ("record_lesson", "recall_lessons"):
+        return str(args.get("text") or args.get("query") or "")
+    if name in ("list_queue", "get_application_history"):
+        limit = args.get("limit")
+        return f"limit={limit}" if limit else ""
+    return ""
+
+
 def _summarize_args(args: dict) -> str:
-    """Compact one-line arg preview for the status message."""
+    """Fallback arg dump — only used for unknown tools."""
     try:
         s = json.dumps(args, ensure_ascii=False)
     except Exception:
@@ -733,13 +956,24 @@ class _StatusBoard:
                 logger.debug("status edit failed: %s", e)
 
     async def begin_call(self, name: str, args: dict) -> int:
-        self._lines.append(f"🔧 `{name}` {_summarize_args(args)}")
+        emoji = _tool_emoji(name, args)
+        preview = _tool_input_preview(name, args)
+        line = f"{emoji} {name}"
+        if preview:
+            line += f": {preview[:120]}"
+        self._lines.append(line)
         await self._flush()
         return len(self._lines) - 1
 
     async def end_call(self, idx: int, name: str, args: dict, result: Any) -> None:
         if 0 <= idx < len(self._lines):
-            self._lines[idx] = f"🔧 `{name}` {_summarize_args(args)} → {_summarize_result(result)}"
+            emoji = _tool_emoji(name, args)
+            preview = _tool_input_preview(name, args)
+            line = f"{emoji} {name}"
+            if preview:
+                line += f": {preview[:120]}"
+            line += f" → {_summarize_result(result)}"
+            self._lines[idx] = line
             await self._flush()
 
     async def note(self, line: str) -> None:
