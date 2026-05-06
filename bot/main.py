@@ -270,6 +270,13 @@ def main() -> None:
     app = bot.build_app(post_init=post_init)
 
     logger.info("Bot starting...")
+    # Python 3.12 compat: PTB calls asyncio.get_event_loop() on entry, which
+    # raises RuntimeError in 3.12 when no current loop is set in the thread
+    # (systemd-spawned processes have none by default). Set one explicitly.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling(drop_pending_updates=True)
 
 
