@@ -82,6 +82,7 @@ def load_preferences(profile: dict) -> JobPreferences:
         seniority=_strlist("seniority"),
         work_arrangement=_strlist("work_arrangement"),
         excluded_companies=[str(c).strip() for c in (raw.get("excluded_companies") or []) if c],
+        excluded_title_keywords=[str(c).strip().lower() for c in (raw.get("excluded_title_keywords") or []) if c],
         auto_apply_threshold=_int("auto_apply_threshold"),
         requires_sponsorship=requires_sponsorship,
         auto_search=auto_search,
@@ -103,6 +104,7 @@ def save_preferences(profile: dict, prefs: JobPreferences, path: str) -> None:
         "seniority": prefs.seniority,
         "work_arrangement": prefs.work_arrangement,
         "excluded_companies": prefs.excluded_companies,
+        "excluded_title_keywords": prefs.excluded_title_keywords,
         "auto_apply_threshold": prefs.auto_apply_threshold,
         "requires_sponsorship": prefs.requires_sponsorship,
     }

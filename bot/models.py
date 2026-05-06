@@ -59,6 +59,7 @@ class JobPreferences:
     seniority: list[str] = field(default_factory=list)
     work_arrangement: list[str] = field(default_factory=list)  # "remote"|"hybrid"|"onsite"
     excluded_companies: list[str] = field(default_factory=list)
+    excluded_title_keywords: list[str] = field(default_factory=list)  # case-insensitive title substrings; any match → hard pass
     auto_apply_threshold: int = 0  # match_score >= this + all fit checks pass → apply without Y/N (0 = disabled)
     requires_sponsorship: bool = False  # True if candidate needs H-1B or similar visa sponsorship
     auto_search: bool = True        # auto-generate searches from desired_roles (no manual /search add needed)

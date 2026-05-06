@@ -276,6 +276,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Auto Job Applier\n\n"
+        "You can talk to me in plain English — \"skip all manager roles\", "
+        "\"$200k floor\", \"only remote\" — and I'll set the right preference.\n\n"
         "Send any LinkedIn Easy Apply, Greenhouse, or Lever URL to start an application.\n"
         "Reply Y to apply, N to skip. Or let auto-apply handle it (see /prefs).\n\n"
 
@@ -289,7 +291,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/prefs autosearch on|off \u2014 auto-generate searches from your roles\n"
         "/prefs sponsorship yes|no \u2014 filter for jobs that sponsor visas\n"
         "/prefs exclude <company> \u2014 hard-skip a company\n"
-        "/prefs unexclude <company> \u2014 remove from skip list\n\n"
+        "/prefs unexclude <company> \u2014 remove from skip list\n"
+        "/prefs exclude_title <kw> \u2014 hard-skip any job whose title contains kw (e.g. 'manager')\n"
+        "/prefs unexclude_title <kw> \u2014 remove a title-keyword filter\n\n"
 
         "── Job discovery ──\n"
         "/search add <query> [in <location>] \u2014 save a LinkedIn search\n"
@@ -421,72 +425,143 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("Nothing to cancel.")
 
 
+def _strip_json_fences(raw: str) -> str:
+    """Return raw with surrounding ```json ... ``` fences stripped."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+        raw = re.sub(r"\n?```\s*$", "", raw)
+    return raw.strip()
+
+
+async def _dispatch_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, cmd_str: str
+) -> bool:
+    """Execute a '/command arg1 arg2' string by routing to the matching cmd_*.
+
+    Returns True on success, False if the command isn't recognized or raised.
+    Used by the natural-language interpreter to actually *do* what the user
+    asked rather than tell them how to type it.
+    """
+    parts = cmd_str.strip().lstrip("/").split()
+    if not parts:
+        return False
+    cmd_name = parts[0].lower()
+    handler = globals().get(f"cmd_{cmd_name}")
+    if not handler or not callable(handler):
+        logger.info("dispatch: no handler for /%s", cmd_name)
+        return False
+    context.args = parts[1:]
+    try:
+        await handler(update, context)
+        return True
+    except Exception as e:
+        logger.error("dispatch failed for %s: %s", cmd_str, e)
+        return False
+
+
 async def _handle_conversational(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str
 ) -> None:
-    """Fallback for any message that isn't a command, URL, or known response.
+    """Interpret natural language and either execute a command or reply.
 
-    Uses Claude to interpret the user's intent and respond helpfully in plain
-    language.  Works for greetings, confused users, natural-language preference
-    expressions ("I want remote SWE jobs in NYC"), and anything else.
+    Routes the user's message through Claude with a strict JSON schema:
+    the model returns either an /command to dispatch internally, a direct
+    conversational reply, or a clarifying question. We never make the user
+    re-type a command after we've understood the intent.
     """
     db: ApplicationDB = context.bot_data["db"]
     profile: dict = context.bot_data["profile"]
     prefs = load_preferences(profile)
 
-    recent_count = len(await db.get_recent(limit=200))
     queue_count = await db.get_queue_count()
     searches = await db.get_active_searches()
-
     roles_str = ", ".join(prefs.desired_roles) if prefs.desired_roles else "not set"
-    salary_str = f"${prefs.min_salary:,}" if prefs.min_salary else "not set"
-    seniority_str = ", ".join(prefs.seniority) if prefs.seniority else "any"
-    arrangement_str = ", ".join(prefs.work_arrangement) if prefs.work_arrangement else "any"
-    searches_str = (
-        ", ".join(f'"{s.query}"' for s in searches) if searches else "none set up yet"
-    )
+    excluded_companies_str = ", ".join(prefs.excluded_companies) if prefs.excluded_companies else "none"
+    excluded_titles_str = ", ".join(prefs.excluded_title_keywords) if prefs.excluded_title_keywords else "none"
 
     prompt = (
-        "You are a helpful Telegram bot that automates job applications for people.\n\n"
-        "The user sent a message you need to interpret and respond to helpfully.\n"
-        "Respond in plain conversational text — no markdown, no bullet points, "
-        "2–4 sentences max. Be warm, clear, and give them exactly one actionable next step.\n\n"
-        "What this bot can do:\n"
-        "- Paste any LinkedIn Easy Apply, Greenhouse, or Lever job URL → bot analyzes it, "
-        "writes a tailored resume and cover letter, asks Y/N to apply\n"
-        "- /search add <role> [in <location>] → bot checks LinkedIn every 30 min, "
-        "queues matching new jobs automatically\n"
-        "- /queue → see discovered jobs and pick which ones to look at\n"
-        "- /prefs roles <role1,role2> → tell the bot what jobs you want\n"
-        "- /prefs salary <min> → set your salary floor\n"
-        "- /prefs seniority junior|mid|senior|staff → filter by level\n"
-        "- /prefs arrangement remote|hybrid|onsite → filter by location type\n"
-        "- /prefs autoapply 80 → bot auto-submits jobs scoring 80+ without asking\n"
-        "- /profile → run an interview to add achievements to your profile\n"
-        "- /sources → see GitHub new-grad repos and company job boards being monitored\n\n"
-        f"Their current setup:\n"
+        "You are an intent parser for a job-application Telegram bot. The user "
+        "just sent a message. Decide what they want and respond with JSON ONLY — "
+        "no markdown fences, no commentary, no explanation outside JSON.\n\n"
+
+        "Available commands (use exact syntax including any flags):\n"
+        "  /prefs roles <role1,role2,...>\n"
+        "  /prefs salary <min> [target]\n"
+        "  /prefs seniority <levels>     (junior|mid|senior|staff|principal|director)\n"
+        "  /prefs arrangement <modes>    (remote|hybrid|onsite)\n"
+        "  /prefs autoapply <0-100>\n"
+        "  /prefs autosearch on|off\n"
+        "  /prefs sponsorship yes|no\n"
+        "  /prefs exclude <company>\n"
+        "  /prefs unexclude <company>\n"
+        "  /prefs exclude_title <keyword>      ← skips any job whose TITLE contains the keyword\n"
+        "  /prefs unexclude_title <keyword>\n"
+        "  /prefs                              ← show current prefs\n"
+        "  /search add <query> [in <location>]\n"
+        "  /search list\n"
+        "  /search rm <id>\n"
+        "  /queue       /report     /history [N]    /failed\n"
+        "  /status      /help       /profile        /linkedin\n\n"
+
+        f"User's current state:\n"
         f"  Desired roles: {roles_str}\n"
-        f"  Min salary: {salary_str}\n"
-        f"  Seniority: {seniority_str}\n"
-        f"  Arrangement: {arrangement_str}\n"
-        f"  Active searches: {searches_str}\n"
-        f"  Applications sent: {recent_count}\n"
-        f"  Jobs waiting in queue: {queue_count}\n\n"
-        f"User's message: {text}\n\n"
-        "If they seem to be describing job preferences in natural language "
-        "(e.g. 'I want remote software jobs in NYC'), extract what they said and "
-        "give them the exact /prefs commands to run. "
-        "If they seem lost or are greeting you, briefly explain the single most "
-        "useful thing they can do right now given their setup above."
+        f"  Excluded companies: {excluded_companies_str}\n"
+        f"  Excluded title keywords: {excluded_titles_str}\n"
+        f"  Active searches: {len(searches)}\n"
+        f"  Jobs in queue: {queue_count}\n\n"
+
+        f'User said: "{text}"\n\n'
+
+        "Respond with EXACTLY ONE of these JSON shapes:\n"
+        '  Execute a command (preferred when an action is implied):\n'
+        '    {"action":"command", "command":"/prefs exclude_title manager", "confirm":"Skipping all jobs with \'manager\' in the title."}\n'
+        '  Conversational reply (no command applies):\n'
+        '    {"action":"reply", "reply":"Hi! Send a job URL or /help to see what I can do."}\n'
+        '  Ask a clarifying question:\n'
+        '    {"action":"clarify", "question":"Did you mean exclude management roles entirely, or just senior managers?"}\n\n'
+
+        "Mapping rules:\n"
+        '- "skip manager roles" / "no managers" / "all non-manager jobs" / "exclude management" → /prefs exclude_title manager\n'
+        '- "no senior" → /prefs seniority junior,mid\n'
+        '- "$200k floor" / "minimum 200k" → /prefs salary 200000\n'
+        '- "remote only" → /prefs arrangement remote\n'
+        '- "stop applying to <X>" / "skip <Company>" → /prefs exclude <Company>\n'
+        '- "find me <role> jobs" → /search add <role>\n'
+        '- "what\'s in my queue" / "show pending" → /queue\n'
+        '- "stats" / "how am I doing" → /report\n'
+        "- If the message is ambiguous, ask to clarify rather than guess.\n"
+        "- Never tell the user to type a command — execute it directly via the command action.\n"
+        "- The 'confirm' field is what the user sees BEFORE the command runs (one short sentence)."
     )
 
     try:
-        response = await claude_call(prompt)
-        await update.message.reply_text(response)
-    except LLMError:
+        raw = await claude_call(prompt)
+        data = json.loads(_strip_json_fences(raw))
+    except (json.JSONDecodeError, LLMError) as e:
+        logger.warning("conversational intent parse failed: %s", e)
         await update.message.reply_text(
-            "Send me a job URL to apply, or use /help to see what I can do."
+            "Send a job URL to apply, or /help to see all commands."
         )
+        return
+
+    action = data.get("action")
+    if action == "command":
+        cmd = (data.get("command") or "").strip()
+        confirm = (data.get("confirm") or "").strip()
+        if confirm:
+            await update.message.reply_text(confirm)
+        ok = await _dispatch_command(update, context, cmd)
+        if not ok:
+            await update.message.reply_text(
+                f"I understood you, but couldn't run `{cmd}`. Try /help for the full list."
+            )
+    elif action == "clarify":
+        q = data.get("question") or "Could you say more about what you want?"
+        await update.message.reply_text(q)
+    else:
+        reply = data.get("reply") or "Send a job URL or /help to see what I can do."
+        await update.message.reply_text(reply)
 
 
 @requires_auth
@@ -757,6 +832,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         seniority = ", ".join(prefs.seniority) if prefs.seniority else "any"
         arrangement = ", ".join(prefs.work_arrangement) if prefs.work_arrangement else "any"
         excluded = ", ".join(prefs.excluded_companies) if prefs.excluded_companies else "none"
+        excluded_titles = ", ".join(prefs.excluded_title_keywords) if prefs.excluded_title_keywords else "none"
         auto = f"score >= {prefs.auto_apply_threshold}" if prefs.auto_apply_threshold else "off"
         sponsorship = "yes (need sponsorship)" if prefs.requires_sponsorship else "no"
         auto_search = "on" if prefs.auto_search else "off"
@@ -781,7 +857,10 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Visa sponsorship needed: {sponsorship}\n"
             f"  \u2192 /prefs sponsorship yes|no\n\n"
             f"Excluded companies: {excluded}\n"
-            f"  \u2192 /prefs exclude Google  |  /prefs unexclude Google"
+            f"  \u2192 /prefs exclude Google  |  /prefs unexclude Google\n\n"
+            f"Excluded title keywords: {excluded_titles}\n"
+            f"  any job whose title contains one of these is auto-skipped\n"
+            f"  \u2192 /prefs exclude_title manager  |  /prefs unexclude_title manager"
         )
         return
 
@@ -888,6 +967,34 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.bot_data["profile"] = profile
         await update.message.reply_text(f"Removed from exclusion list: {company}")
 
+    elif sub in ("exclude_title", "exclude-title", "excludetitle"):
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Usage: /prefs exclude_title <keyword>\n"
+                "Any job whose title contains the keyword (case-insensitive) is hard-skipped.\n"
+                "Example: /prefs exclude_title manager"
+            )
+            return
+        kw = " ".join(args[1:]).strip().lower()
+        if kw and kw not in prefs.excluded_title_keywords:
+            prefs.excluded_title_keywords.append(kw)
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(
+            f"Added title-keyword filter: '{kw}'.\n"
+            f"All jobs with '{kw}' in the title will now be auto-skipped."
+        )
+
+    elif sub in ("unexclude_title", "unexclude-title", "unexcludetitle"):
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /prefs unexclude_title <keyword>")
+            return
+        kw = " ".join(args[1:]).strip().lower()
+        prefs.excluded_title_keywords = [k for k in prefs.excluded_title_keywords if k != kw]
+        save_preferences(profile, prefs, profile_path)
+        context.bot_data["profile"] = profile
+        await update.message.reply_text(f"Removed title-keyword filter: '{kw}'")
+
     elif sub == "sponsorship":
         if len(args) < 2 or args[1].lower() not in ("yes", "no"):
             await update.message.reply_text("Usage: /prefs sponsorship yes|no")
@@ -926,6 +1033,7 @@ async def cmd_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text(
             "Unknown subcommand. Options: roles, salary, seniority, arrangement, "
+            "exclude_title, unexclude_title, "
             "autoapply, autosearch, exclude, unexclude, sponsorship"
         )
 
@@ -1736,6 +1844,41 @@ def _build_batch_message(jobs: list["QueuedJob"], new_count: int | None = None) 
     return "\n".join(lines)
 
 
+async def _resolve_batch_indices_via_llm(text: str, batch: list[QueuedJob]) -> list[int]:
+    """Ask Claude which jobs in the batch the user wants, given a freeform text.
+
+    Returns 0-based indices into `batch`. Empty list if the model can't decide.
+    """
+    listing = "\n".join(f"{i+1}. {j.title} — {j.company}" for i, j in enumerate(batch))
+    prompt = (
+        "The user is choosing which jobs in this batch to investigate. "
+        "Pick the ones matching their request.\n\n"
+        f"Batch (1-indexed):\n{listing}\n\n"
+        f'User said: "{text}"\n\n'
+        "Return JSON ONLY: {\"indices\":[1,3,5], \"reason\":\"...\"}\n"
+        "- 'indices' is the 1-based list of jobs that match the user's request\n"
+        "- If the user means 'all' or 'every', list every index 1..N\n"
+        "- If 'all non-X', exclude any job whose title contains X (case-insensitive)\n"
+        "- If you cannot tell, return {\"indices\":[], \"reason\":\"unclear\"}\n"
+        "- Output ONLY the JSON object, no markdown, no commentary"
+    )
+    try:
+        raw = await claude_call(prompt)
+        data = json.loads(_strip_json_fences(raw))
+    except (json.JSONDecodeError, LLMError) as e:
+        logger.warning("batch NL resolve failed: %s", e)
+        return []
+    out: list[int] = []
+    for n in data.get("indices", []):
+        try:
+            i = int(n) - 1
+            if 0 <= i < len(batch):
+                out.append(i)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def _handle_batch_response(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1768,11 +1911,16 @@ async def _handle_batch_response(
                 if 0 <= idx < len(batch):
                     indices.append(idx)
         if not indices:
-            await update.message.reply_text(
-                "Reply with job numbers (e.g. 1,3) or 'all' to investigate, "
-                "or 'skip all' to dismiss."
-            )
-            return
+            # Natural-language fallback: ask Claude to pick which jobs in the
+            # batch match the user's intent (e.g. "all non-manager jobs").
+            indices = await _resolve_batch_indices_via_llm(text, batch)
+            if not indices:
+                await update.message.reply_text(
+                    "I couldn't pick jobs from that. Reply with numbers (e.g. 1,3), "
+                    "'all', or 'skip all'. You can also describe what to apply to "
+                    "in plain English (e.g. 'all non-manager roles')."
+                )
+                return
         selected = [batch[i] for i in indices]
 
     # Dismiss all non-selected pending jobs

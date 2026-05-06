@@ -50,6 +50,15 @@ def evaluate_fit(job: JobAnalysis, prefs: JobPreferences) -> FitReport:
                 report.hard_pass_reason = f"{job.company} is on your excluded-companies list."
                 return report  # nothing else matters
 
+    # --- Excluded title keywords ---
+    if prefs.excluded_title_keywords:
+        title_lower = job.title.lower()
+        for kw in prefs.excluded_title_keywords:
+            if kw and kw in title_lower:
+                report.hard_pass = True
+                report.hard_pass_reason = f"Title contains excluded keyword '{kw}'."
+                return report
+
     # --- Salary ---
     if prefs.min_salary > 0 and (job.salary_min > 0 or job.salary_max > 0):
         posted = job.salary_max if job.salary_max > 0 else job.salary_min
