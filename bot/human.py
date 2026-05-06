@@ -76,7 +76,11 @@ delete window.__pwInitScripts;
 """
 
 
-async def launch_stealth_context(playwright, auth_state: Optional[str] = None):
+async def launch_stealth_context(
+    playwright,
+    auth_state: Optional[str] = None,
+    proxy: Optional[dict] = None,
+):
     """Launch a Chromium browser with a randomised, human-like fingerprint.
 
     Returns (browser, context). Caller is responsible for closing both.
@@ -84,13 +88,17 @@ async def launch_stealth_context(playwright, auth_state: Optional[str] = None):
     Args:
         playwright: The Playwright instance (from async_playwright().__aenter__).
         auth_state: Optional path to saved storage state (e.g. LinkedIn cookies).
+        proxy: Optional Playwright proxy dict, e.g. {"server": "socks5://127.0.0.1:25344"}.
+            Used for one-off auth bootstrap from a non-flagged IP. Once auth
+            cookies are saved, subsequent calls drop the proxy and rely on
+            cookies, which are IP-agnostic.
     """
     viewport = random.choice(_VIEWPORTS)
     ua = random.choice(_USER_AGENTS)
     locale = random.choice(_LOCALES)
     timezone_id = random.choice(_TIMEZONES)
 
-    browser = await playwright.chromium.launch(
+    launch_kwargs: dict = dict(
         headless=True,
         args=[
             "--no-sandbox",
@@ -100,6 +108,9 @@ async def launch_stealth_context(playwright, auth_state: Optional[str] = None):
             f"--window-size={viewport['width']},{viewport['height']}",
         ],
     )
+    if proxy:
+        launch_kwargs["proxy"] = proxy
+    browser = await playwright.chromium.launch(**launch_kwargs)
 
     ctx_kwargs: dict = dict(
         viewport=viewport,

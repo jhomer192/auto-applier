@@ -413,6 +413,26 @@ sudo systemctl restart auto-applier
 **Bot applied to a job that won't sponsor visas**
 Run `/prefs sponsorship yes` in Telegram. The bot will hard-skip future jobs that explicitly decline to sponsor. Jobs that don't mention sponsorship will still come through with a warning.
 
+**LinkedIn login hangs on a "Let's do a quick security check" page that never loads**
+This is LinkedIn flagging your VPS's IP as a datacenter address. Headless logins from Hetzner / DigitalOcean / Linode IPs trip Arkose's pre-challenge gate, which presents an infinite loading spinner instead of an actual puzzle. The fix is to route just the login through Cloudflare WARP (free, no signup) so cookies get acquired from a Cloudflare IP, then drop the proxy — saved cookies are IP-agnostic so the bot runs on your normal VPS IP afterwards.
+
+There's a one-shot helper for this:
+
+```bash
+LINKEDIN_EMAIL='you@example.com' \
+LINKEDIN_PASSWORD='your-password' \
+bash setup/linkedin_login_via_warp.sh
+```
+
+It downloads `wireproxy` + `wgcf` into a scratch dir, registers a free WARP account, starts a process-isolated SOCKS5 proxy on `127.0.0.1:25344`, runs `setup/linkedin_login.py` through it, then tears everything down. Your SSH session is never affected — wireproxy keeps WireGuard inside its own process and doesn't touch the system routing table.
+
+If LinkedIn asks for a 2FA code, the script screenshots the page and pushes it to your Telegram bot. Reply with `code 123456` (the digits LinkedIn texted/emailed you) and the script picks the code up via the bot's text handler.
+
+After login, no proxy or WARP is needed for normal operation — the bot uses the saved `data/linkedin_auth.json` cookies, which work from any IP.
+
+**LinkedIn login worked but searches are still skipping after a few weeks**
+LinkedIn's `li_at` cookie has a ~60-day lifetime. Re-run `setup/linkedin_login_via_warp.sh` to refresh. As an alternative to logging in fresh, you can export cookies from your local browser using the Cookie-Editor Chrome extension and paste the resulting JSON into a Telegram message to the bot — `bot/telegram_bot.py` detects JSON-with-`linkedin` and writes the auth state directly.
+
 ---
 
 ## You're done

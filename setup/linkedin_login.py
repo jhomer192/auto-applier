@@ -169,8 +169,14 @@ async def main() -> None:
     Path("data").mkdir(exist_ok=True)
     Path("data/screenshots").mkdir(parents=True, exist_ok=True)
 
+    proxy = None
+    proxy_server = os.environ.get("PLAYWRIGHT_PROXY", "").strip()
+    if proxy_server:
+        proxy = {"server": proxy_server}
+        print(f"Routing browser through proxy: {proxy_server}")
+
     async with async_playwright() as p:
-        browser, ctx = await launch_stealth_context(p, auth_state=None)
+        browser, ctx = await launch_stealth_context(p, auth_state=None, proxy=proxy)
         page = await ctx.new_page()
         try:
             print(f"Loading {LOGIN_URL}")
