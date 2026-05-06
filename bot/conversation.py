@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -44,8 +45,12 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-MAX_INNER_ITERS = 25                # effectively unlimited; wall-clock is the real bound
-TURN_WALLCLOCK_BUDGET_SEC = 300     # 5 min hard limit per user turn (LLM cost + UX)
+import sys
+
+# No artificial cap — match claude-bot's maxTurns: Number.MAX_SAFE_INTEGER.
+# The model decides when it's done; runtime stops only when Claude returns
+# no tool calls.
+MAX_INNER_ITERS = sys.maxsize
 HISTORY_LIMIT = 60                  # rows pulled from conversation_messages per turn
 HISTORY_RENDER_CHAR_BUDGET = 12000  # cap on the rendered transcript section
 LESSONS_PATH = "data/lessons.jsonl"
@@ -399,6 +404,53 @@ CREATE_CONVERSATION_IDX = (
     "CREATE INDEX IF NOT EXISTS idx_conv_chat_ts ON conversation_messages(chat_id, ts);"
 )
 
+# Tracks whether we've already initialized a Claude-side session for a chat.
+# Separate from conversation_messages because the Claude CLI's session
+# storage is on its own filesystem; our local message log can outlive an
+# uninitialized claude-CLI session (e.g. after an upgrade that introduces
+# session resumption like this one).
+CREATE_SESSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    chat_id     INTEGER PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+# Stable namespace UUID (valid v4 format, all hex) so per-chat session IDs
+# are deterministic across process restarts.
+_SESSION_NAMESPACE = uuid.UUID("3a7c9f28-1c1f-4f2a-9b1a-3373ee2a1d4f")
+
+
+def _session_id_for_chat(chat_id: int) -> str:
+    """Stable per-chat session UUID for `claude --session-id` / `claude --resume`."""
+    return str(uuid.uuid5(_SESSION_NAMESPACE, f"auto-applier-chat-{chat_id}"))
+
+
+async def _get_session_state(db: ApplicationDB, chat_id: int) -> tuple[str, bool]:
+    """Return (session_id, is_resume). is_resume=True iff we've successfully
+    initialized this session at least once before."""
+    sid = _session_id_for_chat(chat_id)
+    async with aiosqlite.connect(db._path) as conn:
+        cur = await conn.execute(
+            "SELECT 1 FROM chat_sessions WHERE chat_id=?",
+            (chat_id,),
+        )
+        row = await cur.fetchone()
+    return (sid, row is not None)
+
+
+async def _mark_session_initialized(db: ApplicationDB, chat_id: int) -> None:
+    """Record that a Claude session now exists for this chat, so future
+    turns use --resume instead of --session-id."""
+    sid = _session_id_for_chat(chat_id)
+    async with aiosqlite.connect(db._path) as conn:
+        await conn.execute(
+            "INSERT OR IGNORE INTO chat_sessions (chat_id, session_id) VALUES (?, ?)",
+            (chat_id, sid),
+        )
+        await conn.commit()
+
 
 async def _ensure_table(db: ApplicationDB) -> None:
     """Idempotent — run by the runtime on first turn so a brand-new DB picks up
@@ -406,6 +458,7 @@ async def _ensure_table(db: ApplicationDB) -> None:
     async with aiosqlite.connect(db._path) as conn:
         await conn.execute(CREATE_CONVERSATION_TABLE)
         await conn.execute(CREATE_CONVERSATION_IDX)
+        await conn.execute(CREATE_SESSIONS_TABLE)
         await conn.commit()
 
 
@@ -538,6 +591,31 @@ def _build_prompt(history: list[dict], lessons: list[dict], force_json: bool = F
     ])
 
 
+def _build_resume_prompt(history: list[dict]) -> str:
+    """Prompt for a resumed Claude session — Claude already has the system
+    prompt + tools + prior history in its own session memory, so we only need
+    to nudge the JSON output convention and surface any tool results from the
+    last iteration.
+    """
+    # Render only the most recent few rows (current iteration's user msg +
+    # any tool results since last assistant turn).
+    recent = history[-6:]
+
+    def _format(r: dict) -> str:
+        role = r["role"]
+        content = r.get("content") or ""
+        if role == "tool":
+            tn = r.get("tool_name") or "?"
+            if len(content) > 600:
+                content = content[:600] + "...(truncated)"
+            return f"[tool {tn}] {content}"
+        return f"[{role}] {content}"
+
+    lines = [_format(r) for r in recent]
+    return ("Continue. Reply ONLY with one <json>{...}</json> object as before.\n\n"
+            + "\n".join(lines))
+
+
 # ── Response parsing ────────────────────────────────────────────────────────
 
 _JSON_FENCE = re.compile(r"<json>\s*(\{.*?\})\s*</json>", re.DOTALL | re.IGNORECASE)
@@ -586,6 +664,96 @@ async def _typing_keepalive(bot, chat_id: int) -> None:
         pass
 
 
+# ── Live status / tool-call visibility ──────────────────────────────────────
+
+def _summarize_args(args: dict) -> str:
+    """Compact one-line arg preview for the status message."""
+    try:
+        s = json.dumps(args, ensure_ascii=False)
+    except Exception:
+        s = str(args)
+    if len(s) > 70:
+        s = s[:67] + "..."
+    return s
+
+
+def _summarize_result(result: Any) -> str:
+    """Compact one-line result preview for the status message."""
+    if isinstance(result, dict):
+        if "error" in result:
+            return f"✗ {str(result['error'])[:60]}"
+        if "ok" in result:
+            return "✓"
+        # Pull a notable scalar if present
+        for key in ("count", "dismissed", "investigating", "search_id", "stored"):
+            if key in result:
+                return f"✓ {key}={result[key]}"
+    s = str(result)
+    return s[:80] + "..." if len(s) > 80 else s
+
+
+class _StatusBoard:
+    """A single Telegram message edited in-place to show tool calls as they fire.
+    Mirrors the streaming tool-call visibility of the user's claude-bot."""
+
+    def __init__(self, bot, chat_id: int):
+        self._bot = bot
+        self._chat_id = chat_id
+        self._msg_id: Optional[int] = None
+        self._lines: list[str] = []
+        self._last_text = ""
+
+    async def open(self, header: str = "thinking…") -> None:
+        try:
+            msg = await self._bot.send_message(chat_id=self._chat_id, text=header)
+            self._msg_id = msg.message_id
+            self._lines = [header]
+            self._last_text = header
+        except Exception as e:
+            logger.debug("status open failed: %s", e)
+
+    async def _flush(self) -> None:
+        if self._msg_id is None:
+            return
+        text = "\n".join(self._lines).strip() or "..."
+        if text == self._last_text:
+            return
+        # Telegram has a 4096 char message limit; keep it well under.
+        if len(text) > 3500:
+            text = text[:3000] + "\n…(truncated, full reply below)"
+        try:
+            await self._bot.edit_message_text(
+                chat_id=self._chat_id, message_id=self._msg_id, text=text,
+            )
+            self._last_text = text
+        except Exception as e:
+            # Telegram returns 400 when the new text is identical to the
+            # current — silently fine. Other errors we just log and move on.
+            if "not modified" not in str(e).lower():
+                logger.debug("status edit failed: %s", e)
+
+    async def begin_call(self, name: str, args: dict) -> int:
+        self._lines.append(f"🔧 `{name}` {_summarize_args(args)}")
+        await self._flush()
+        return len(self._lines) - 1
+
+    async def end_call(self, idx: int, name: str, args: dict, result: Any) -> None:
+        if 0 <= idx < len(self._lines):
+            self._lines[idx] = f"🔧 `{name}` {_summarize_args(args)} → {_summarize_result(result)}"
+            await self._flush()
+
+    async def note(self, line: str) -> None:
+        self._lines.append(line)
+        await self._flush()
+
+    async def close(self, footer: Optional[str] = None) -> None:
+        if self._msg_id is None:
+            return
+        if footer:
+            self._lines.append(footer)
+            await self._flush()
+
+
 # ── Main entry ──────────────────────────────────────────────────────────────
 
 async def run_conversation_turn(
@@ -600,34 +768,64 @@ async def run_conversation_turn(
     await _ensure_table(db)
     lock = _chat_locks[chat_id]
 
-    try:
-        await asyncio.wait_for(lock.acquire(), timeout=LOCK_ACQUIRE_TIMEOUT)
-    except asyncio.TimeoutError:
-        await update.message.reply_text("Still working on your last message — give me a sec and try again.")
-        return
+    # If the bot is already processing for this chat, send a "queued" notice
+    # and wait. asyncio.Lock has FIFO wakeup so messages are processed in
+    # order naturally — no separate queue datastructure needed.
+    if lock.locked():
+        try:
+            await update.message.reply_text("📋 queued behind your last message…")
+        except Exception:
+            pass
+    await lock.acquire()
 
     keepalive: Optional[asyncio.Task] = None
     final_reply: Optional[str] = None
+    status = _StatusBoard(context.bot, chat_id)
 
     try:
         await _append_conversation(db, chat_id, "user", user_text)
         keepalive = asyncio.create_task(_typing_keepalive(context.bot, chat_id))
-        turn_started = time.time()
+        await status.open(header="thinking…")
+
+        # First call ever for this chat → pin a new claude-CLI session with
+        # --session-id and pass the full system prompt + tool catalog. Every
+        # subsequent call (including across process restarts) → --resume so
+        # Claude retains its server-side context. Same shape as claude-bot's
+        # Agent-SDK `resume: sessionId` pattern.
+        session_id, is_resume = await _get_session_state(db, chat_id)
+        sent_system_already = is_resume
 
         for it in range(MAX_INNER_ITERS):
-            if time.time() - turn_started > TURN_WALLCLOCK_BUDGET_SEC:
-                logger.info("conversation: wall-clock budget hit at iter %d", it)
-                if not final_reply:
-                    final_reply = ("I took a lot of actions but ran out of time on this turn — "
-                                   "tell me to keep going if you want more.")
-                break
             history = await _get_recent_conversation(db, chat_id)
             lessons = _load_lessons()
-            prompt = _build_prompt(history, lessons)
+            if not sent_system_already:
+                # Full preamble on the very first call; afterwards we let
+                # Claude rely on its own session memory + the iteration's
+                # tool-result transcript fed back in.
+                prompt = _build_prompt(history, lessons)
+                sent_system_already = True
+            else:
+                prompt = _build_resume_prompt(history)
             try:
-                raw = await claude_call(prompt)
+                raw = await claude_call(prompt, session_id=session_id, resume=is_resume)
+                # Mark session as initialized once first call succeeds, so
+                # future turns (this iter or new ones) use --resume.
+                if not is_resume:
+                    await _mark_session_initialized(db, chat_id)
+                    is_resume = True
             except LLMError as e:
-                logger.warning("claude_call failed: %s", e)
+                logger.warning("claude_call failed (resume=%s, sid=%s): %s",
+                               is_resume, session_id, e)
+                # If the session-id was unknown (resume mismatch), wipe our
+                # bookkeeping and retry once with --session-id (fresh session).
+                if "no such session" in str(e).lower() or "session not found" in str(e).lower():
+                    logger.info("session resume mismatch; restarting session")
+                    async with aiosqlite.connect(db._path) as conn:
+                        await conn.execute("DELETE FROM chat_sessions WHERE chat_id=?", (chat_id,))
+                        await conn.commit()
+                    is_resume = False
+                    sent_system_already = False
+                    continue
                 final_reply = "My brain just hiccuped. Send that again?"
                 break
 
@@ -636,7 +834,10 @@ async def run_conversation_turn(
                 # One re-prompt with stricter instruction
                 logger.info("conversation: parse failed iter %d, re-prompting", it)
                 try:
-                    raw2 = await claude_call(_build_prompt(history, lessons, force_json=True))
+                    raw2 = await claude_call(
+                        _build_prompt(history, lessons, force_json=True),
+                        session_id=session_id, resume=is_resume,
+                    )
                 except LLMError:
                     final_reply = "My brain just hiccuped. Send that again?"
                     break
@@ -659,7 +860,9 @@ async def run_conversation_turn(
                 final_reply = reply or "Done."
                 break
 
-            # Execute each tool sequentially; persist results as `tool` rows.
+            # Execute each tool sequentially; persist results as `tool` rows
+            # AND stream the call+result into the status message so the user
+            # sees what's happening in real time (parity with claude-bot's UX).
             for call in tool_calls:
                 if not isinstance(call, dict):
                     continue
@@ -667,6 +870,7 @@ async def run_conversation_turn(
                 args = call.get("args") or {}
                 if not isinstance(args, dict):
                     args = {"_raw": args}
+                slot = await status.begin_call(name or "?", args)
                 if name not in TOOLS:
                     result: dict = {"error": f"unknown tool: {name}",
                                     "available": list(TOOLS.keys())}
@@ -676,6 +880,7 @@ async def run_conversation_turn(
                     except Exception as e:
                         logger.exception("tool %s raised", name)
                         result = {"error": f"{type(e).__name__}: {e}"}
+                await status.end_call(slot, name or "?", args, result)
                 logger.info("conversation tool %s args=%s -> %s", name, args, str(result)[:200])
                 await _append_conversation(
                     db, chat_id, "tool",

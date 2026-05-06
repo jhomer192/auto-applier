@@ -114,8 +114,25 @@ def _extract_json(raw: str) -> str:
     return stripped  # caller will get a json.JSONDecodeError with useful context
 
 
-async def claude_call(prompt: str) -> str:
+async def claude_call(prompt: str, session_id: str | None = None, resume: bool = False) -> str:
     """Run `claude -p -` in a thread, passing the prompt via stdin.
+
+    Optionally pins a session_id and resumes it on subsequent calls so the
+    Claude side keeps full conversational state between turns — same pattern
+    as claude-bot's Claude Agent SDK session resumption. The first call for
+    a chat sets `session_id` (no resume); later calls in the same chat pass
+    `session_id` AND `resume=True` to continue the same session server-side.
+
+    Args:
+        prompt: User text to send.
+        session_id: Stable UUID identifying the chat/session. Optional — if
+            omitted, behaves like a one-shot call (no session resumption).
+            Used by bot.conversation; other call sites (cover-letter
+            generation, job analysis, etc.) leave it unset for stateless
+            one-shots.
+        resume: When True, pass `--resume <session_id>` instead of starting
+            a new session with that id. Caller is responsible for tracking
+            "is this the first turn for this chat or not."
 
     Retries up to 3 times on transient failures (timeout, empty output, non-zero
     exit that looks like a rate-limit or overload error). Permanent errors (e.g.
@@ -128,18 +145,24 @@ async def claude_call(prompt: str) -> str:
     _BACKOFF = [2, 4, 8]  # seconds between retries
 
     def _run() -> str:
+        cmd = ["claude", "-p", "-"]
+        if session_id:
+            if resume:
+                cmd.extend(["--resume", session_id])
+            else:
+                cmd.extend(["--session-id", session_id])
         try:
             result = subprocess.run(
-                ["claude", "-p", "-"],
+                cmd,
                 input=prompt,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,  # bumped from 120 — agent loops can be long
             )
         except FileNotFoundError:
             raise LLMError("claude CLI not found — install it: npm install -g @anthropic-ai/claude-code")
         except subprocess.TimeoutExpired:
-            raise LLMError("claude CLI timed out after 120 s")
+            raise LLMError("claude CLI timed out after 300 s")
         if result.returncode != 0:
             stderr = result.stderr.strip()
             raise LLMError(f"claude CLI failed (exit {result.returncode}): {stderr}")
