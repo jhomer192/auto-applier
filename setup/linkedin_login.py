@@ -35,7 +35,7 @@ SCREENSHOT_PATH = "data/screenshots/linkedin_login_2fa.png"
 CODE_FILE_PATH = "data/linkedin_2fa_code.txt"
 LOGIN_URL = "https://www.linkedin.com/login"
 FEED_MARKER = "linkedin.com/feed"
-LOGIN_TIMEOUT_SECONDS = 60
+LOGIN_TIMEOUT_SECONDS = 180  # bumped: LinkedIn's Arkose security check takes ~30-90s to either auto-pass or show a puzzle
 CODE_WAIT_SECONDS = 600  # 10 min for user to send the code
 
 
@@ -82,6 +82,19 @@ async def _wait_for_code() -> str:
                 pass
         await asyncio.sleep(1.5)
     raise TimeoutError("No 2FA code received within 10 min. Re-run the script.")
+
+
+async def _fill_first_match(page, selectors: list[str], value: str, timeout_ms: int = 8000) -> bool:
+    """Try each selector; fill the first visible match. Returns True on success."""
+    for sel in selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=timeout_ms, state="visible")
+            if el:
+                await el.fill(value)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _handle_2fa_if_present(page) -> bool:
@@ -162,10 +175,47 @@ async def main() -> None:
         try:
             print(f"Loading {LOGIN_URL}")
             await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(4)  # React hydration — form inputs aren't real until ~3s
 
-            await page.fill("input#username", email)
-            await page.fill("input#password", password)
-            await page.click("button[type='submit']")
+            # Selectors ordered from most-stable to least. LinkedIn's React form
+            # now uses auto-generated IDs (:r3:) and no name attribute, so
+            # autocomplete is the load-bearing hook.
+            email_filled = await _fill_first_match(
+                page,
+                [
+                    "input[autocomplete='username']:visible",
+                    "input[autocomplete='username']",
+                    "input[type='email']",
+                    "input[name='session_key']",
+                    "input#username",
+                ],
+                email,
+            )
+            if not email_filled:
+                fallback = "data/screenshots/linkedin_login_no_form.png"
+                Path(fallback).parent.mkdir(parents=True, exist_ok=True)
+                await page.screenshot(path=fallback, full_page=False)
+                await _send_telegram_photo(
+                    "Couldn't find LinkedIn's email field — screenshot attached. "
+                    "LinkedIn may have changed selectors or shown a verify-human page.",
+                    fallback,
+                )
+                raise RuntimeError("Could not locate email field on LinkedIn login page.")
+
+            pw_filled = await _fill_first_match(
+                page,
+                [
+                    "input[autocomplete='current-password']",
+                    "input[type='password']",
+                    "input[name='session_password']",
+                    "input#password",
+                ],
+                password,
+            )
+            if not pw_filled:
+                raise RuntimeError("Could not locate password field on LinkedIn login page.")
+
+            await page.click("button[type='submit'], button[data-litms-control-urn='login-submit']")
             print("Submitted credentials. Watching for redirect...")
 
             # Wait up to LOGIN_TIMEOUT_SECONDS for either feed or 2FA

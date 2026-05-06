@@ -195,6 +195,7 @@ class AutoApplierBot:
         app.add_handler(CommandHandler("scams", cmd_scams))
         app.add_handler(CommandHandler("scam_apply", cmd_scam_apply))
         app.add_handler(CommandHandler("force", cmd_force))
+        app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         return app
@@ -567,6 +568,97 @@ async def _handle_conversational(
 
 _CODE_PATTERN = re.compile(r"^\s*code\s+([A-Za-z0-9]{4,12})\s*$", re.IGNORECASE)
 LINKEDIN_2FA_CODE_FILE = "data/linkedin_2fa_code.txt"
+LINKEDIN_AUTH_STATE_FILE = "data/linkedin_auth.json"
+
+
+def _browser_cookies_to_storage_state(raw: list) -> dict:
+    """Convert a browser-extension cookie export (Cookie-Editor / EditThisCookie
+    style: list of {name, value, domain, ...}) into Playwright's storage_state
+    format. Drops fields Playwright doesn't understand and normalizes sameSite.
+    """
+    out_cookies = []
+    for c in raw:
+        if not isinstance(c, dict) or "name" not in c or "value" not in c:
+            continue
+        same_site_raw = (c.get("sameSite") or "").lower()
+        same_site = {
+            "no_restriction": "None",
+            "unspecified": "None",
+            "none": "None",
+            "lax": "Lax",
+            "strict": "Strict",
+        }.get(same_site_raw, "Lax")
+        # expirationDate may be float, integer, or absent (session cookie)
+        exp_raw = c.get("expirationDate") or c.get("expires") or -1
+        try:
+            expires = int(float(exp_raw))
+        except (TypeError, ValueError):
+            expires = -1
+        out_cookies.append({
+            "name": c["name"],
+            "value": c["value"],
+            "domain": c.get("domain") or ".linkedin.com",
+            "path": c.get("path") or "/",
+            "expires": expires,
+            "httpOnly": bool(c.get("httpOnly", False)),
+            "secure": bool(c.get("secure", False)),
+            "sameSite": same_site,
+        })
+    return {"cookies": out_cookies, "origins": []}
+
+
+def _save_linkedin_auth(raw_text: str) -> tuple[bool, str]:
+    """Parse a JSON blob, treat it as either a Playwright storage_state already
+    or a browser cookie list, and write it to LINKEDIN_AUTH_STATE_FILE.
+    Returns (ok, message_to_user).
+    """
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return False, f"That doesn't parse as JSON: {e.msg}"
+
+    if isinstance(data, dict) and "cookies" in data and isinstance(data["cookies"], list):
+        storage_state = data  # already Playwright format
+    elif isinstance(data, list):
+        storage_state = _browser_cookies_to_storage_state(data)
+    else:
+        return False, "JSON must be either a Playwright storage_state or a list of cookies."
+
+    li_cookies = [c for c in storage_state["cookies"] if "linkedin.com" in (c.get("domain") or "")]
+    has_li_at = any(c.get("name") == "li_at" for c in li_cookies)
+    if not has_li_at:
+        return False, (
+            "No `li_at` cookie found in the export — that's the LinkedIn session "
+            "token. Make sure you exported cookies for linkedin.com while logged in."
+        )
+
+    Path(LINKEDIN_AUTH_STATE_FILE).parent.mkdir(parents=True, exist_ok=True)
+    Path(LINKEDIN_AUTH_STATE_FILE).write_text(json.dumps(storage_state, indent=2))
+    return True, (
+        f"LinkedIn auth saved ({len(li_cookies)} cookies, including li_at). "
+        "Searches will run on the next 30-min poll cycle."
+    )
+
+
+@requires_auth
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Accept a JSON document upload — treat as LinkedIn auth state import."""
+    doc = update.message.document
+    if not doc:
+        return
+    mime = doc.mime_type or ""
+    if mime not in ("application/json", "text/json", "text/plain"):
+        await update.message.reply_text(
+            f"Got a document ({mime}). I only handle JSON cookie exports right now."
+        )
+        return
+    if doc.file_size and doc.file_size > 200_000:
+        await update.message.reply_text("Cookie file looks too large (>200KB). Are you sure that's the right export?")
+        return
+    file = await doc.get_file()
+    raw = await file.download_as_bytearray()
+    ok, msg = _save_linkedin_auth(raw.decode("utf-8", errors="replace"))
+    await update.message.reply_text(msg)
 
 
 @requires_auth
@@ -577,8 +669,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     profile: dict = context.bot_data["profile"]
     registry: AdapterRegistry = context.bot_data["registry"]
 
-    # Case 0: out-of-band 2FA code drop-off for setup/linkedin_login.py.
-    # The login script polls for this file and picks it up.
+    # Case 0a: out-of-band 2FA code drop-off for setup/linkedin_login.py.
     m = _CODE_PATTERN.match(text)
     if m:
         try:
@@ -588,6 +679,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error("2fa code dropoff failed: %s", e)
             await update.message.reply_text("Got the code but couldn't save it. Check logs.")
+        return
+
+    # Case 0b: pasted LinkedIn cookie JSON (from Cookie-Editor / EditThisCookie
+    # browser extension). Accepts either an array of cookie dicts or a full
+    # Playwright storage_state. Recognized when the message is JSON-ish and
+    # mentions linkedin.
+    if (text.startswith("[") or text.startswith("{")) and "linkedin" in text.lower() and len(text) < 100_000:
+        ok, msg = _save_linkedin_auth(text)
+        await update.message.reply_text(msg)
         return
 
     # Case 1a: waiting for a recruiter email reply from the user
