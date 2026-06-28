@@ -160,6 +160,15 @@ def set_profile_email(profile_path: str, address: str) -> None:
     _atomic_write(profile_path, text, mode=0o644)
 
 
+def set_form_email(profile_paths, address: str) -> None:
+    """Set the forms email (address only, no creds) on every existing profile.yaml.
+    Used when there's no password yet or IMAP couldn't be verified — applications
+    still go out under the right address even without PIN auto-read."""
+    for p in profile_paths:
+        if p and os.path.exists(p):
+            set_profile_email(p, address)
+
+
 async def submit_email(
     address: str,
     password: str,
@@ -188,9 +197,7 @@ async def submit_email(
     creds = {"IMAP_USER": address, "IMAP_PASS": password,
              "IMAP_HOST": host, "IMAP_PORT": str(port)}
     set_env_keys(env_path, creds)
-    for p in profile_paths:
-        if p and os.path.exists(p):
-            set_profile_email(p, address)
+    set_form_email(profile_paths, address)
     # Refresh the live process env: apply subprocesses inherit dict(os.environ),
     # and check_email.cjs only fills vars that aren't ALREADY set — without this,
     # the next apply would read PINs from the stale startup inbox, not this one.

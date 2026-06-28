@@ -128,16 +128,14 @@ class ApplierDiscord(discord.Client):
         # machine sees one message at a time, exactly as PTB delivered them.
         async with self._dispatch_lock:
             content = message.content or ""
-            # A scoped applicant (not Jack) may only submit their email.
+            # A scoped applicant (not Jack) can ONLY register their email, so treat
+            # EVERY message from them as an email submission — no /email prefix
+            # needed. They can paste "<address> <app-password>" directly.
             if not is_jack:
-                head = content[1:].split(None, 1) if content.startswith("/") else []
-                if not head or head[0].lower() != "email":
-                    await self._messenger._send_text(
-                        "You can only register your email here:\n"
-                        "`/email <address> <app-password> [imap-host]`"
-                    )
-                    return
-                await self._handle_email(message, head[1] if len(head) > 1 else "")
+                body = content
+                if body.lower().startswith("/email"):
+                    body = body[len("/email"):]
+                await self._handle_email(message, body.strip())
                 return
             try:
                 if content.startswith("/"):
@@ -203,19 +201,33 @@ class ApplierDiscord(discord.Client):
         note = self._delete_note(deleted)
 
         address, password, host = email_setup.parse_email_command(remainder)
-        if not address or not password:
+        if not address:
             await self._messenger._send_text(
-                "Usage: `/email <address> <app-password> [imap-host]`" + note)
+                "Send your email like this:  `your-address@gmail.com your-app-password`\n"
+                "(Gmail needs an **app password** — myaccount.google.com → App passwords.)" + note)
             return
+        # Update BOTH the bot's profile.yaml and the apply workspace's
+        # (/opt/auto-applier) — the apply subprocess reads its own copy for the email
+        # it types onto forms.
+        from bot.mcp_apply import MCP_DIR
+        profile_paths = [
+            self._bot_data.get("profile_path", "profile.yaml"),
+            os.path.join(MCP_DIR, "profile.yaml"),
+        ]
+        # No password → set just the forms address; PIN auto-read stays off.
+        if not password:
+            try:
+                email_setup.set_form_email(profile_paths, address)
+            except Exception:  # noqa: BLE001
+                logger.exception("set_form_email failed")
+                await self._messenger._send_text("⚠️ Internal error saving the email (see logs)." + note)
+                return
+            await self._messenger._send_text(
+                f"✅ Saved **{address}** as the application email. ⚠️ No app password given, so "
+                f"I can't auto-read verification PINs yet — add one to turn that on." + note)
+            return
+        # Address + password → verify the inbox and store everything.
         try:
-            # Update BOTH the bot's profile.yaml and the apply workspace's
-            # (/opt/auto-applier) — the apply subprocess reads its own copy for the
-            # email it types onto forms.
-            from bot.mcp_apply import MCP_DIR
-            profile_paths = [
-                self._bot_data.get("profile_path", "profile.yaml"),
-                os.path.join(MCP_DIR, "profile.yaml"),
-            ]
             summary = await email_setup.submit_email(
                 address, password,
                 env_path=self._env_path,
@@ -223,7 +235,15 @@ class ApplierDiscord(discord.Client):
                 explicit_host=host,
             )
         except email_setup.EmailSetupError as exc:
-            await self._messenger._send_text(f"⚠️ {exc}{note}")
+            # Couldn't verify the mailbox (e.g. Gmail wants an app password). Still
+            # set the forms address so applications go out under it; PIN read stays off.
+            try:
+                email_setup.set_form_email(profile_paths, address)
+            except Exception:  # noqa: BLE001
+                logger.exception("set_form_email fallback failed")
+            await self._messenger._send_text(
+                f"✅ Saved **{address}** for applications, but I couldn't verify the inbox: {exc}\n"
+                f"⚠️ Verification-PIN auto-read is OFF until you send a working **app password**." + note)
             return
         except Exception:  # noqa: BLE001 — never surface a trace that might hold the secret
             logger.exception("email setup failed (no secret logged)")
