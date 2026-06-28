@@ -158,9 +158,18 @@ def _extract_plain_body(msg: email_lib.message.Message) -> str:
 
 
 class GmailInbox:
-    def __init__(self, address: str, app_password: str) -> None:
+    def __init__(self, address: str, app_password: str, *,
+                 imap_host: str = IMAP_HOST, imap_port: int = IMAP_PORT,
+                 smtp_host: str | None = None, smtp_port: int = SMTP_PORT) -> None:
         self._address = address
         self._app_password = app_password
+        # Host-configurable so the same class serves Gmail and the Network Solutions
+        # mailbox (jack@homerfamily.com). SMTP is derived from IMAP when not given —
+        # imap.gmail.com -> smtp.gmail.com, netsol-imap-oxcs -> netsol-smtp-oxcs.
+        self._imap_host = imap_host
+        self._imap_port = imap_port
+        self._smtp_host = smtp_host or imap_host.replace("imap", "smtp")
+        self._smtp_port = smtp_port
 
     # ── IMAP polling ─────────────────────────────────────────────────────────
 
@@ -172,7 +181,7 @@ class GmailInbox:
         """
         threads: list[EmailThread] = []
         try:
-            with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as conn:
+            with imaplib.IMAP4_SSL(self._imap_host, self._imap_port) as conn:
                 conn.login(self._address, self._app_password)
                 conn.select("INBOX", readonly=True)  # readonly so we don't auto-mark seen
 
@@ -230,43 +239,15 @@ class GmailInbox:
         """Async wrapper around IMAP fetch. Returns new unseen messages."""
         return await asyncio.to_thread(self._fetch_unseen_messages)
 
-    # ── SMTP sending ──────────────────────────────────────────────────────────
+    # ── SMTP sending — PERMANENTLY DISABLED ────────────────────────────────────
+    # This applier must NEVER send email from the configured mailbox. The inbox is
+    # an applicant's personal account; auto-replying to it once sent nonsense to
+    # marketing/no-reply addresses. The IMAP READ path above stays (used ONLY by the
+    # apply-time verification-code reader), but every send path is hard-removed so no
+    # code path — present or future — can put mail in someone's outbox.
 
-    def _send_reply_sync(
-        self,
-        to_address: str,
-        subject: str,
-        body: str,
-        in_reply_to: str,
-        references: str,
-    ) -> None:
-        """Send a reply email via SMTP. Blocking — run via asyncio.to_thread()."""
-        domain = self._address.split("@")[-1] if "@" in self._address else "mail.local"
-        own_message_id = f"<{uuid.uuid4().hex}@{domain}>"
-
-        msg = MIMEMultipart("alternative")
-        msg["From"] = self._address
-        msg["To"] = to_address
-        msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
-        msg["Message-ID"] = own_message_id
-        msg["In-Reply-To"] = in_reply_to
-        msg["References"] = f"{references} {own_message_id}".strip()
-        msg.attach(MIMEText(body, "plain"))
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(self._address, self._app_password)
-            server.sendmail(self._address, [to_address], msg.as_string())
-
-    async def send_reply(self, thread: EmailThread, body: str) -> None:
-        """Send a reply to a recruiter email and log it."""
-        await asyncio.to_thread(
-            self._send_reply_sync,
-            thread.from_address,
-            thread.subject,
-            body,
-            thread.message_id,
-            f"{thread.thread_id} {thread.message_id}".strip(),
+    async def send_reply(self, thread: EmailThread, body: str) -> None:  # noqa: ARG002
+        raise RuntimeError(
+            "Outbound email is permanently disabled in this applier — it must never "
+            "send mail from the applicant's mailbox."
         )
-        logger.info("inbox: sent reply to %s re: %s", thread.from_address, thread.subject)

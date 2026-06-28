@@ -20,6 +20,7 @@ from typing import Callable, Optional
 import discord
 
 from bot import email_setup
+from bot import job_finder
 from bot import telegram_bot as tb
 from bot.transport import Ctx, FakeApp, Messenger
 
@@ -63,6 +64,7 @@ class ApplierDiscord(discord.Client):
         self._messenger: Optional[Messenger] = None
         self._app: Optional[FakeApp] = None
         self._loops_started = False
+        self._hunt_running = False  # one job-hunt (find+apply) at a time
         # PTB processes updates sequentially (concurrent_updates=False by default);
         # the handlers + handle_text state machine freely mutate shared user_data/
         # bot_data under that guarantee. discord.py instead dispatches every
@@ -124,58 +126,150 @@ class ApplierDiscord(discord.Client):
         if self._messenger is None:  # not ready yet
             return
 
-        # Serialize handler execution (see _dispatch_lock) so the shared state
-        # machine sees one message at a time, exactly as PTB delivered them.
-        async with self._dispatch_lock:
-            content = message.content or ""
-            # A scoped applicant (not Jack) can ONLY register their email, so treat
-            # EVERY message from them as an email submission — no /email prefix
-            # needed. They can paste "<address> <app-password>" directly.
-            if not is_jack:
-                body = content
-                if body.lower().startswith("/email"):
-                    body = body[len("/email"):]
-                await self._handle_email(message, body.strip())
+        content = (message.content or "").strip()
+        low = content.lower()
+        tokens = content.split()
+
+        # (a) Email registration: explicit /email, or an applicant pasting
+        #     "<address> <app-password>" (an @-address as the first token).
+        is_email_msg = low.startswith("/email") or (
+            not is_jack and len(tokens) >= 2 and "@" in tokens[0] and "." in tokens[0]
+        )
+        if is_email_msg:
+            async with self._dispatch_lock:
+                body = content[len("/email"):].strip() if low.startswith("/email") else content
+                await self._handle_email(message, body)
+            return
+
+        # (b) Job hunt: a plain message, or /find|/apply|/hunt|/jobs <query>. The
+        #     candidate just messages what they want; the agent finds Bay Area roles
+        #     and applies to all of them. Runs in the background so it never blocks.
+        is_hunt_cmd = any(low.startswith(p) for p in ("/find", "/apply", "/hunt", "/jobs"))
+        if is_hunt_cmd or not content.startswith("/"):
+            query = (content.split(None, 1)[1].strip() if (is_hunt_cmd and len(tokens) > 1)
+                     else "" if is_hunt_cmd else content)
+            await self._start_hunt(query)
+            return
+
+        # (c) Jack's legacy slash commands (/status, /history, …) remain available.
+        if is_jack:
+            async with self._dispatch_lock:
+                await self._legacy_command(message, content)
+
+    async def _legacy_command(self, message: discord.Message, content: str) -> None:
+        try:
+            head = content[1:].split(None, 1)
+            if not head:
                 return
-            try:
-                if content.startswith("/"):
-                    head = content[1:].split(None, 1)
-                    if not head:
-                        return
-                    name = head[0].lower()
-                    remainder = head[1] if len(head) > 1 else ""
-                    if name == "email":
-                        await self._handle_email(message, remainder)
-                        return
-                    handler = COMMANDS.get(name)
-                    if handler is None:
-                        await self._messenger._send_text(f"Unknown command /{name}. Try /help.")
-                        return
-                    if name in RAW_ARG_COMMANDS:
-                        args = [remainder.strip()] if remainder.strip() else []
-                    else:
-                        try:
-                            args = shlex.split(remainder)
-                        except ValueError:
-                            args = remainder.split()
-                    ctx = self._ctx(message, args=args)
-                    await handler(ctx, ctx)
-                elif message.attachments:
-                    if len(message.attachments) > 1:
-                        await self._messenger._send_text(
-                            f"⚠️ Got {len(message.attachments)} attachments — only the first is processed."
-                        )
-                    ctx = self._ctx(message)
-                    await tb.handle_document(ctx, ctx)
-                else:
-                    ctx = self._ctx(message)
-                    await tb.handle_text(ctx, ctx)
-            except Exception:
-                logger.exception("handler error")
+            name = head[0].lower()
+            remainder = head[1] if len(head) > 1 else ""
+            handler = COMMANDS.get(name)
+            if handler is None:
+                await self._messenger._send_text(
+                    f"Unknown command /{name}. Just message what jobs to find (e.g. "
+                    f"“bay area SOC analyst”) and I'll find and apply to them."
+                )
+                return
+            if name in RAW_ARG_COMMANDS:
+                args = [remainder.strip()] if remainder.strip() else []
+            else:
                 try:
-                    await self._messenger._send_text("⚠️ internal error (see logs). Send /cancel to reset.")
+                    args = shlex.split(remainder)
+                except ValueError:
+                    args = remainder.split()
+            ctx = self._ctx(message, args=args)
+            await handler(ctx, ctx)
+        except Exception:
+            logger.exception("handler error")
+            try:
+                await self._messenger._send_text("⚠️ internal error (see logs).")
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── Job hunt: find Bay Area jobs + apply to all of them, as the candidate ──────
+
+    async def _start_hunt(self, query: str) -> None:
+        if self._hunt_running:
+            await self._messenger._send_text(
+                "⏳ Already searching and applying — I'll keep going through this batch. "
+                "Send your next search once it wraps up."
+            )
+            return
+        self._hunt_running = True
+        asyncio.create_task(self._run_hunt(query))
+
+    async def _run_hunt(self, query: str) -> None:
+        try:
+            await self._messenger._send_text(
+                f"\U0001f50e Searching Google + LinkedIn for Bay Area roles"
+                f"{(' — ' + query) if query else ''}… (a few minutes)"
+            )
+            urls = await job_finder.find_jobs(query)
+            if not urls:
+                await self._messenger._send_text(
+                    "No Bay Area postings found this pass. Try different role keywords."
+                )
+                return
+            db = self._bot_data.get("db")
+            fresh = []
+            for u in urls:
+                try:
+                    if db and await db.is_already_applied(u):
+                        continue
                 except Exception:  # noqa: BLE001
                     pass
+                fresh.append(u)
+            await self._messenger._send_text(
+                f"Found {len(urls)} postings ({len(fresh)} new). Applying as Zachary to all of them…"
+            )
+            from bot.mcp_apply import apply_via_mcp
+            applied = blocked = failed = 0
+            for u in fresh:
+                try:
+                    res = await apply_via_mcp(u)
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    await self._messenger._send_text(f"❌ error on {u}: {type(exc).__name__}")
+                    continue
+                result = (res.get("result") or "").strip()
+                await self._record_apply(u, res)
+                if res.get("success"):
+                    applied += 1; emoji = "✅"
+                elif result.lower().startswith("blocked"):
+                    blocked += 1; emoji = "⛔"
+                else:
+                    failed += 1; emoji = "❌"
+                await self._messenger._send_text(f"{emoji} {result or 'done'}\n{u}")
+            await self._messenger._send_text(
+                f"\U0001f3c1 Done — {applied} applied, {blocked} skipped (not Bay Area / closed), {failed} failed."
+            )
+        except Exception:
+            logger.exception("job hunt failed")
+            try:
+                await self._messenger._send_text("⚠️ Job hunt hit an internal error (see logs).")
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            self._hunt_running = False
+
+    async def _record_apply(self, url: str, res: dict) -> None:
+        db = self._bot_data.get("db")
+        if not db:
+            return
+        from datetime import datetime, timezone
+        from bot.models import ApplicationRecord
+        result = (res.get("result") or "").strip()
+        status = "applied" if res.get("success") else (
+            "skipped" if result.lower().startswith("blocked") else "failed")
+        try:
+            await db.insert_application(ApplicationRecord(
+                url=url, title="", company="", site="mcp",
+                status=status,
+                applied_at=datetime.now(timezone.utc).isoformat() if status == "applied" else None,
+                notes=result[:500],
+            ))
+        except Exception:  # noqa: BLE001
+            logger.exception("could not record apply for %s", url)
 
     @staticmethod
     def _delete_note(deleted: bool) -> str:

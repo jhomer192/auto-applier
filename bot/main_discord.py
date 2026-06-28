@@ -24,15 +24,6 @@ from bot.db import ApplicationDB
 from bot.inbox import GmailInbox
 from bot.profile import ProfileError, load_profile
 from bot.voice import load_voice_profile
-from bot.sources import ALL_SOURCES
-from bot.sources.handshake import HandshakeSource
-from bot.main import (
-    _heartbeat,
-    _inbox_poll_loop,
-    _search_poll_loop,
-    _sources_poll_loop,
-    _supervise,
-)
 from bot.discord_frontend import ApplierDiscord
 
 # Pin noisy libraries to WARNING so the gateway/REST token never lands in the
@@ -92,15 +83,19 @@ def main() -> None:
 
     registry = AdapterRegistry(linkedin_auth_state=linkedin_auth)
 
+    # The continuous recruiter-inbox poller reads the WHOLE inbox and can auto-reply
+    # to senders. That is NEVER appropriate for an applicant's personal mailbox, so
+    # it is OFF by default and only runs if ENABLE_INBOX_POLL=1 is explicitly set.
+    # Apply-time verification-PIN reading is SEPARATE (scripts/check_email.cjs, run
+    # on-demand only during an active application) and does not depend on this.
+    enable_inbox_poll = os.getenv("ENABLE_INBOX_POLL", "").strip().lower() in ("1", "true", "yes", "on")
     gmail_inbox: GmailInbox | None = None
-    if inbox_user and inbox_pass:
+    if enable_inbox_poll and inbox_user and inbox_pass:
         gmail_inbox = GmailInbox(inbox_user, inbox_pass,
                                  imap_host=inbox_imap_host, imap_port=inbox_imap_port)
-        logger.info("Email inbox enabled for %s via %s", inbox_user, inbox_imap_host)
+        logger.info("Recruiter inbox poller ENABLED for %s", inbox_user)
     else:
-        # Wording avoids the literal "PASSWORD"/"token" so the goal's journal
-        # secret-grep (grep -iE 'token|password|bot[0-9]') stays clean.
-        logger.info("Email inbox disabled (credentials not configured)")
+        logger.info("Recruiter inbox poller OFF — no inbox reading or auto-replies (apply-time PIN read unaffected)")
 
     # Mirror build_app()'s bot_data so the unmodified handlers find their refs.
     bot_data: dict = {
@@ -115,19 +110,14 @@ def main() -> None:
     }
 
     def build_loops(app) -> None:
-        # Mirrors main._post_init: preload voice profile + handshake source, then
-        # schedule each poll loop under _supervise with a heartbeat.
+        # On-demand only. This bot acts ONLY when messaged in #applications (find +
+        # apply, in discord_frontend). All three legacy background pollers are
+        # retired: the inbox poller must never auto-read/reply to the applicant's
+        # mailbox, and the search/sources pollers were tuned for software-eng
+        # new-grads, not this candidate. Apply-time verification-code reading is a
+        # separate on-demand call (scripts/check_email.cjs) made during an apply.
         app.bot_data["voice_profile"] = load_voice_profile()
-        app.bot_data["handshake_source"] = next(
-            (s for s in ALL_SOURCES if isinstance(s, HandshakeSource)), None
-        )
-        if gmail_inbox:
-            app.create_task(_supervise(app, "inbox-poller", _inbox_poll_loop, app, gmail_inbox))
-            app.create_task(_heartbeat("inbox-poller"))
-        app.create_task(_supervise(app, "search-poller", _search_poll_loop, app, linkedin_auth))
-        app.create_task(_heartbeat("search-poller"))
-        app.create_task(_supervise(app, "sources-poller", _sources_poll_loop, app))
-        app.create_task(_heartbeat("sources-poller"))
+        app.bot_data["handshake_source"] = None
 
     client = ApplierDiscord(
         channel_id=channel_id, jack_id=jack_id, bot_data=bot_data, build_loops=build_loops,
