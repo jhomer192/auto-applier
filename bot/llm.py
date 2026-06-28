@@ -145,7 +145,7 @@ async def claude_call(prompt: str, session_id: str | None = None, resume: bool =
     _BACKOFF = [2, 4, 8]  # seconds between retries
 
     def _run() -> str:
-        cmd = ["claude", "-p", "-"]
+        cmd = ["claude", "-p", "-", "--dangerously-skip-permissions"]
         if session_id:
             if resume:
                 cmd.extend(["--resume", session_id])
