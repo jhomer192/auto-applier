@@ -17,37 +17,35 @@ import time
 MCP_DIR = "/opt/auto-applier"
 logger = logging.getLogger("auto-applier-discord")
 
-_FINDER_PROMPT = """Find live job-application URLs for the candidate described in profile.yaml.
-Read profile.yaml first for their target roles, skills and seniority. {query_line}
+_FINDER_PROMPT = """Find live Bay-Area job-application URLs for the candidate in profile.yaml
+(read it first for their target roles/skills). {query_line}
 
-HARD LOCATION RULE: San Francisco BAY AREA only (SF, East Bay, Peninsula, South Bay/Silicon
-Valley, North Bay/Marin). Ignore anything outside the Bay Area. Remote-only with no Bay Area
-anchor does NOT count.
+Work FAST — you have limited time, so do NOT open each result page; just harvest URLs from
+search-result pages. Use the playwright MCP browser tools.
 
-Use the playwright MCP browser tools (mcp__playwright__*). Do BOTH of these:
+PRIMARY — DuckDuckGo HTML (no JavaScript, no CAPTCHA — returns a plain list of links). For each
+query, navigate to:  https://html.duckduckgo.com/html/?q=<url-encoded query>  and read the result
+links from the page snapshot. Run these queries, substituting the candidate's roles for <role>:
+  1. <role> San Francisco Bay Area site:boards.greenhouse.io
+  2. <role> San Francisco Bay Area site:jobs.lever.co
+  3. <role> Bay Area site:jobs.ashbyhq.com
+  4. <role> "San Francisco" OR "Bay Area" jobs apply
+From the results, COLLECT job-posting URLs — especially boards.greenhouse.io/*/jobs/*,
+jobs.lever.co/*, jobs.ashbyhq.com/*, and company careers/apply pages. Keep only roles that plausibly
+fit the candidate and are in the Bay Area. De-duplicate.
 
-1) WEB SEARCH (Google; if it shows a CAPTCHA, use Bing or DuckDuckGo instead): run a few query
-   variants combining the roles with Bay Area locations and the common ATS hosts, e.g.
-     <role> ("San Francisco" OR "Bay Area" OR Oakland OR "Palo Alto" OR "San Jose") site:boards.greenhouse.io
-     <role> ("San Francisco" OR "Bay Area") site:jobs.lever.co
-     <role> ("San Francisco" OR "Bay Area") site:jobs.ashbyhq.com
-   Open promising results and capture the DIRECT application URL (the page with the apply form).
+THEN (only if time remains) try LinkedIn once:
+  https://www.linkedin.com/jobs/search?keywords=<role>&location=San%20Francisco%20Bay%20Area
+Grab any external ATS apply URLs visible without logging in. If it demands a login, SKIP it.
 
-2) LINKEDIN JOBS: go to https://www.linkedin.com/jobs/search and search the roles with the
-   location set to "San Francisco Bay Area". For each relevant posting, capture its application
-   URL — if it links out to an external ATS (greenhouse/lever/ashby/workday/etc.), use that
-   external URL; otherwise use the LinkedIn job URL. If LinkedIn requires login and you can't
-   proceed, just rely on the web-search results.
+Aim for up to {n} URLs total. Spend no more than a few minutes.
 
-Collect only DIRECT application URLs for Bay Area roles that fit the candidate. De-duplicate.
-Aim for up to {n} URLs.
-
-Output the FINAL result on the LAST line as compact JSON, EXACTLY in this form (nothing after it):
+Output the FINAL result on the LAST line as compact JSON, EXACTLY (nothing after it):
 RESULT_URLS: ["https://...", "https://..."]
 If you find none, output exactly: RESULT_URLS: []"""
 
 
-async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 1200) -> list[str]:
+async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600) -> list[str]:
     """Return a list of Bay Area application URLs. `query` is optional extra role/keyword
     guidance; when empty the agent uses the candidate's desired_roles from profile.yaml."""
     query_line = (
