@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 from typing import Callable, Optional
 
@@ -207,10 +208,18 @@ class ApplierDiscord(discord.Client):
                 "Usage: `/email <address> <app-password> [imap-host]`" + note)
             return
         try:
+            # Update BOTH the bot's profile.yaml and the apply workspace's
+            # (/opt/auto-applier) — the apply subprocess reads its own copy for the
+            # email it types onto forms.
+            from bot.mcp_apply import MCP_DIR
+            profile_paths = [
+                self._bot_data.get("profile_path", "profile.yaml"),
+                os.path.join(MCP_DIR, "profile.yaml"),
+            ]
             summary = await email_setup.submit_email(
                 address, password,
                 env_path=self._env_path,
-                profile_path=self._bot_data.get("profile_path", "profile.yaml"),
+                profile_paths=profile_paths,
                 explicit_host=host,
             )
         except email_setup.EmailSetupError as exc:

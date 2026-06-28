@@ -165,11 +165,15 @@ async def submit_email(
     password: str,
     *,
     env_path: str,
-    profile_path: str,
+    profile_paths,
     explicit_host: str | None = None,
 ) -> str:
-    """Validate creds (live IMAP login), then persist to .env + profile.yaml AND
-    refresh os.environ so the very next apply uses them.
+    """Validate creds (live IMAP login), then persist to .env + every profile.yaml
+    in *profile_paths* AND refresh os.environ so the very next apply uses them.
+
+    *profile_paths* must include BOTH the bot's profile.yaml and the apply
+    workspace's (/opt/auto-applier/profile.yaml) — the apply subprocess reads its
+    own copy, so updating only the bot's would leave the wrong email on forms.
 
     Returns a user-safe success summary (no password, no deletion claim — the
     caller reports the message-deletion outcome). Raises EmailSetupError with a
@@ -184,7 +188,9 @@ async def submit_email(
     creds = {"IMAP_USER": address, "IMAP_PASS": password,
              "IMAP_HOST": host, "IMAP_PORT": str(port)}
     set_env_keys(env_path, creds)
-    set_profile_email(profile_path, address)
+    for p in profile_paths:
+        if p and os.path.exists(p):
+            set_profile_email(p, address)
     # Refresh the live process env: apply subprocesses inherit dict(os.environ),
     # and check_email.cjs only fills vars that aren't ALREADY set — without this,
     # the next apply would read PINs from the stale startup inbox, not this one.

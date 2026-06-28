@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from telegram import Bot
 
+from bot.bay_area import is_bay_area
 from bot.db import ApplicationDB
 from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.llm import analyze_job, draft_outreach_message, generate_cover_letter, generate_field_answer, LLMError, tailor_resume
@@ -111,7 +112,7 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
     voice_profile = load_voice_profile()
 
     # Hard daily cap — safety rail against runaway auto-apply
-    DAILY_CAP = 500
+    DAILY_CAP = 10**9  # no daily limit per Jack
     today_iso = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)).isoformat()
     today_stats = await db.get_stats(since_iso=today_iso)
     applied_today = today_stats.get("applied", 0)
@@ -160,6 +161,26 @@ async def process_queued_jobs(app, linkedin_auth: str) -> None:
         except LLMError as e:
             logger.error("auto_apply: analyze failed for %s: %s", queued_job.url, e)
             needs_review.append(queued_job)
+            continue
+
+        # ----- Step 2b: Bay Area location gate (hard constraint, no matter what) -----
+        # Jack's directive: only apply to Bay Area roles. Strict — unknown/elsewhere
+        # locations are skipped here; the /force path enforces the same rule live in
+        # the apply prompt (bot.bay_area.BAY_AREA_RULE).
+        if not is_bay_area(job_analysis.location, job_info.title):
+            await db.update_queued_job_status(queued_job.id, "dismissed")
+            logger.info(
+                "auto_apply: skipped (not Bay Area) — %s loc=%r",
+                queued_job.url, job_analysis.location,
+            )
+            await db.insert_application(ApplicationRecord(
+                url=queued_job.url,
+                title=job_info.title,
+                company=job_info.company,
+                site=adapter.name,
+                status="skipped",
+                notes=f"Auto-skipped: outside Bay Area ({job_analysis.location or 'unknown location'})",
+            ))
             continue
 
         # ----- Step 3: Fit check -----
