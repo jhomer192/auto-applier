@@ -26,15 +26,26 @@ from bot.profile import ProfileError, load_profile
 from bot.voice import load_voice_profile
 from bot.discord_frontend import ApplierDiscord
 
-# Pin noisy libraries to WARNING so the gateway/REST token never lands in the
-# journal (the Telegram main.py leaks its token at INFO via httpx — we must not).
-# force=True is REQUIRED: importing bot.main above ran its own logging.basicConfig,
-# which would otherwise win and silently drop these settings.
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO, force=True
-)
+# Pin noisy libraries to WARNING so the gateway/REST token never lands in the logs.
+_LOG_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+logging.basicConfig(format=_LOG_FMT, level=logging.INFO, force=True)
 for _noisy in ("discord", "discord.client", "discord.gateway", "discord.http", "httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+# Also log to a rotating FILE so runtime activity is always inspectable — the
+# systemd journal can lag/buffer, and a real log file is how you see when (and why)
+# a hunt/apply breaks. Lives at data/applier.log in the working directory.
+try:
+    from logging.handlers import RotatingFileHandler
+    _logdir = os.path.join(os.getcwd(), "data")
+    os.makedirs(_logdir, exist_ok=True)
+    _fh = RotatingFileHandler(os.path.join(_logdir, "applier.log"), maxBytes=5_000_000, backupCount=3)
+    _fh.setFormatter(logging.Formatter(_LOG_FMT))
+    _fh.setLevel(logging.INFO)
+    logging.getLogger().addHandler(_fh)
+except Exception as _e:  # noqa: BLE001
+    logging.getLogger("auto-applier-discord").warning("file logging unavailable: %s", _e)
+
 logger = logging.getLogger("auto-applier-discord")
 
 

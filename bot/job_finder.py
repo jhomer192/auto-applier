@@ -34,6 +34,10 @@ From the results, COLLECT job-posting URLs — especially boards.greenhouse.io/*
 jobs.lever.co/*, jobs.ashbyhq.com/*, and company careers/apply pages. Keep only roles that plausibly
 fit the candidate and are in the Bay Area. De-duplicate.
 
+IF DuckDuckGo returns NO results or shows a challenge/blank page, do NOT give up — immediately run
+the SAME queries on Bing instead:  https://www.bing.com/search?q=<url-encoded query>  and harvest the
+result links there. Try at least two engines before concluding there are no jobs.
+
 THEN (only if time remains) try LinkedIn once:
   https://www.linkedin.com/jobs/search?keywords=<role>&location=San%20Francisco%20Bay%20Area
 Grab any external ATS apply URLs visible without logging in. If it demands a login, SKIP it.
@@ -45,15 +49,28 @@ RESULT_URLS: ["https://...", "https://..."]
 If you find none, output exactly: RESULT_URLS: []"""
 
 
-async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600) -> list[str]:
-    """Return a list of Bay Area application URLs. `query` is optional extra role/keyword
-    guidance; when empty the agent uses the candidate's desired_roles from profile.yaml."""
+async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
+                    attempts: int = 2) -> list[str]:
+    """Return Bay Area application URLs. Retries on an empty result — search engines
+    occasionally rate-limit/CAPTCHA an automated scrape, and a fresh attempt (new
+    browser session) usually recovers. `query` is optional role guidance; empty =>
+    the candidate's desired_roles from profile.yaml."""
     query_line = (
         f"Focus the search on: {query}." if query.strip()
         else "Use the candidate's desired_roles from profile.yaml as the search terms."
     )
     prompt = _FINDER_PROMPT.format(query_line=query_line, n=max_results)
+    for attempt in range(1, attempts + 1):
+        urls = await _search_once(prompt, query, max_results, timeout)
+        if urls:
+            return urls
+        if attempt < attempts:
+            logger.warning("job_finder: attempt %d/%d found 0 urls — retrying", attempt, attempts)
+    logger.warning("job_finder: all %d attempt(s) returned 0 urls", attempts)
+    return []
 
+
+async def _search_once(prompt: str, query: str, max_results: int, timeout: int) -> list[str]:
     env = dict(os.environ)
     env["HOME"] = "/home/claude"
     env["IS_SANDBOX"] = "1"
