@@ -5,9 +5,12 @@ applies *as them* and reads their verification PINs:
   - `profile.yaml`'s `email:` (typed into application forms), and
   - `.env`'s IMAP_USER/IMAP_PASS/IMAP_HOST/IMAP_PORT (read by scripts/check_email.cjs
     at apply time to pull the PIN)
-both get pointed at the submitted address. The IMAP login is verified BEFORE
+both get pointed at the submitted address, AND the same four keys are refreshed in
+this process's os.environ — otherwise apply subprocesses (which inherit
+`dict(os.environ)`) and check_email.cjs (which only fills vars *not already set*)
+would keep using the stale startup creds. The IMAP login is verified BEFORE
 anything is persisted, so bad creds never get stored. The caller is responsible
-for deleting the Discord message that carried the password — this module never
+for deleting the Discord message that carried the password; this module never
 logs or echoes it.
 """
 from __future__ import annotations
@@ -16,6 +19,7 @@ import asyncio
 import imaplib
 import os
 import re
+import tempfile
 
 # domain -> (imap_host, port). Covers the common consumer providers plus the
 # homerfamily Network Solutions mailbox. Unknown domains require an explicit host.
@@ -34,10 +38,34 @@ _IMAP_HOSTS: dict[str, tuple[str, int]] = {
 }
 
 _ADDR_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# An explicit IMAP host: a dotted hostname, optional :port. App passwords never
+# contain a dot, so this reliably distinguishes a trailing host from password text.
+_HOST_RE = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:\d+)?$")
 
 
 class EmailSetupError(ValueError):
     """Raised with a user-safe message (never contains the password)."""
+
+
+def parse_email_command(remainder: str) -> tuple[str | None, str | None, str | None]:
+    """Parse `<address> <app-password...> [imap-host]` into (address, password, host).
+
+    The app password may arrive in space-separated groups (Gmail shows it as four
+    chunks and users paste it verbatim) — middle tokens are joined with no
+    separator. An explicit IMAP host, if present, is the trailing token that looks
+    like a dotted hostname. Returns (None, None, None) on empty input.
+    """
+    toks = (remainder or "").split()
+    if not toks:
+        return None, None, None
+    address = toks[0]
+    rest = toks[1:]
+    host = None
+    if rest and _HOST_RE.match(rest[-1]):
+        host = rest[-1]
+        rest = rest[:-1]
+    password = "".join(rest)  # collapse spaced app-password groups
+    return address, (password or None), host
 
 
 def resolve_imap(address: str, explicit_host: str | None = None) -> tuple[str, int]:
@@ -78,28 +106,47 @@ def _test_login(host: str, port: int, user: str, password: str) -> None:
 
 
 def _atomic_write(path: str, text: str, mode: int = 0o600) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    """Write *text* to *path* atomically. The temp file is created 0600 with an
+    unpredictable name (O_EXCL via mkstemp) so the secret is never world-readable
+    nor exposed to a symlink/clobber race, then chmod'd to the final mode."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".env")
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def set_env_keys(env_path: str, updates: dict[str, str]) -> None:
-    """Set/replace each KEY=value in *env_path*, preserving all other lines. 0600."""
+    """Set/replace each KEY=value in *env_path*, preserving all other lines and
+    collapsing any pre-existing duplicates so no stale secret survives. 0600."""
     lines = []
     if os.path.exists(env_path):
         lines = open(env_path, encoding="utf-8").read().splitlines()
-    remaining = dict(updates)
-    out = []
+    written: set[str] = set()
+    out: list[str] = []
     for ln in lines:
-        key = ln.split("=", 1)[0] if "=" in ln else None
-        if key in remaining:
-            out.append(f"{key}={remaining.pop(key)}")
-        else:
-            out.append(ln)
-    for key, val in remaining.items():
-        out.append(f"{key}={val}")
+        if "=" in ln:
+            key = ln.split("=", 1)[0].strip()
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if key in updates:
+                if key not in written:  # first occurrence -> rewrite; drop the rest
+                    out.append(f"{key}={updates[key]}")
+                    written.add(key)
+                continue
+        out.append(ln)
+    for key, val in updates.items():
+        if key not in written:
+            out.append(f"{key}={val}")
+            written.add(key)
     _atomic_write(env_path, "\n".join(out) + "\n")
 
 
@@ -121,10 +168,12 @@ async def submit_email(
     profile_path: str,
     explicit_host: str | None = None,
 ) -> str:
-    """Validate creds (live IMAP login), then persist to .env + profile.yaml.
+    """Validate creds (live IMAP login), then persist to .env + profile.yaml AND
+    refresh os.environ so the very next apply uses them.
 
-    Returns a user-safe success summary (no password). Raises EmailSetupError with
-    a safe message on any validation/storage failure.
+    Returns a user-safe success summary (no password, no deletion claim — the
+    caller reports the message-deletion outcome). Raises EmailSetupError with a
+    safe message on any validation/storage failure.
     """
     address = (address or "").strip()
     password = (password or "").strip()
@@ -132,15 +181,15 @@ async def submit_email(
         raise EmailSetupError("Usage: `/email <address> <app-password> [imap-host]`")
     host, port = resolve_imap(address, explicit_host)
     await asyncio.to_thread(_test_login, host, port, address, password)
-    set_env_keys(env_path, {
-        "IMAP_USER": address,
-        "IMAP_PASS": password,
-        "IMAP_HOST": host,
-        "IMAP_PORT": str(port),
-    })
+    creds = {"IMAP_USER": address, "IMAP_PASS": password,
+             "IMAP_HOST": host, "IMAP_PORT": str(port)}
+    set_env_keys(env_path, creds)
     set_profile_email(profile_path, address)
+    # Refresh the live process env: apply subprocesses inherit dict(os.environ),
+    # and check_email.cjs only fills vars that aren't ALREADY set — without this,
+    # the next apply would read PINs from the stale startup inbox, not this one.
+    os.environ.update(creds)
     return (
-        f"✅ Verified and saved **{address}** (IMAP `{host}`).\n"
-        f"Applications will now go out under this address and I'll read its inbox "
-        f"for verification PINs. Your message was deleted so the password isn't left in chat."
+        f"✅ Verified and saved **{address}** (IMAP `{host}`). Applications will now "
+        f"go out under this address and I'll read its inbox for verification PINs."
     )

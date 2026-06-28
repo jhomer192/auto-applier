@@ -178,20 +178,34 @@ class ApplierDiscord(discord.Client):
                 except Exception:  # noqa: BLE001
                     pass
 
+    @staticmethod
+    def _delete_note(deleted: bool) -> str:
+        if deleted:
+            return "\n🗑️ Your message was deleted so the password isn't left in chat."
+        return (
+            "\n⚠️ I could NOT delete your message — it still shows your password. "
+            "Delete it yourself now and rotate that app password."
+        )
+
     async def _handle_email(self, message: discord.Message, remainder: str) -> None:
         """Register/update the applicant mailbox. Deletes the invoking message FIRST
-        (it carries the password) and never logs the secret."""
-        parts = remainder.split()
-        # Wipe the password from the channel before doing anything that could fail.
+        (it carries the password); reports the real deletion outcome and never logs
+        the secret."""
+        # Wipe the password from the channel before anything that could fail. Track
+        # the real result so the reply never falsely claims it was deleted.
+        deleted = False
         try:
             await message.delete()
+            deleted = True
         except discord.HTTPException:
             logger.info("could not delete /email message %s (missing Manage Messages?)", message.id)
-        if len(parts) < 2:
-            await self._messenger._send_text("Usage: `/email <address> <app-password> [imap-host]`")
+        note = self._delete_note(deleted)
+
+        address, password, host = email_setup.parse_email_command(remainder)
+        if not address or not password:
+            await self._messenger._send_text(
+                "Usage: `/email <address> <app-password> [imap-host]`" + note)
             return
-        address, password = parts[0], parts[1]
-        host = parts[2] if len(parts) > 2 else None
         try:
             summary = await email_setup.submit_email(
                 address, password,
@@ -200,10 +214,10 @@ class ApplierDiscord(discord.Client):
                 explicit_host=host,
             )
         except email_setup.EmailSetupError as exc:
-            await self._messenger._send_text(f"⚠️ {exc}")
+            await self._messenger._send_text(f"⚠️ {exc}{note}")
             return
         except Exception:  # noqa: BLE001 — never surface a trace that might hold the secret
             logger.exception("email setup failed (no secret logged)")
-            await self._messenger._send_text("⚠️ Internal error saving the email (see logs).")
+            await self._messenger._send_text("⚠️ Internal error saving the email (see logs)." + note)
             return
-        await self._messenger._send_text(summary)
+        await self._messenger._send_text(summary + note)
