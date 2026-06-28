@@ -51,23 +51,40 @@ If you find none, output exactly: RESULT_URLS: []"""
 
 async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
                     attempts: int = 2) -> list[str]:
-    """Return Bay Area application URLs. Retries on an empty result — search engines
-    occasionally rate-limit/CAPTCHA an automated scrape, and a fresh attempt (new
-    browser session) usually recovers. `query` is optional role guidance; empty =>
-    the candidate's desired_roles from profile.yaml."""
+    """Return Bay Area application URLs.
+
+    PRIMARY source is the live ATS board APIs (bot.job_boards) — current, OPEN roles
+    returned as JSON in seconds, so the applier lands on live forms instead of the
+    stale/closed postings a search engine indexes. Only when the boards come up short
+    do we supplement with the search-engine agent (which is slower and flakier)."""
+    from bot import job_boards
+    board: list[str] = []
+    try:
+        board = await job_boards.find_board_jobs(max_results)
+    except Exception:  # noqa: BLE001
+        logger.exception("job_finder: live board lookup failed")
+    if len(board) >= max_results:
+        logger.info("job_finder: %d urls from live boards (skipping agent search)", len(board))
+        return board[:max_results]
+
+    # Boards thin → supplement with the search-engine agent (retry on empty).
     query_line = (
         f"Focus the search on: {query}." if query.strip()
         else "Use the candidate's desired_roles from profile.yaml as the search terms."
     )
     prompt = _FINDER_PROMPT.format(query_line=query_line, n=max_results)
+    agent: list[str] = []
     for attempt in range(1, attempts + 1):
-        urls = await _search_once(prompt, query, max_results, timeout)
-        if urls:
-            return urls
+        agent = await _search_once(prompt, query, max_results, timeout)
+        if agent:
+            break
         if attempt < attempts:
-            logger.warning("job_finder: attempt %d/%d found 0 urls — retrying", attempt, attempts)
-    logger.warning("job_finder: all %d attempt(s) returned 0 urls", attempts)
-    return []
+            logger.warning("job_finder: agent attempt %d/%d found 0 — retrying", attempt, attempts)
+    seen = set(board)
+    merged = board + [u for u in agent if not (u in seen or seen.add(u))]
+    logger.info("job_finder: %d urls (%d live-board + %d agent)",
+                len(merged), len(board), len(merged) - len(board))
+    return merged[:max_results]
 
 
 async def _search_once(prompt: str, query: str, max_results: int, timeout: int) -> list[str]:
