@@ -10,12 +10,15 @@ config (.mcp.json), the permission allowlist (.claude/settings.json),
 profile.yaml, data/resume.pdf, and scripts/check_email.cjs already wired.
 """
 import asyncio
+import logging
 import os
 import re
+import time
 
 from bot.bay_area import BAY_AREA_RULE
 
 MCP_DIR = "/opt/auto-applier"
+logger = logging.getLogger("auto-applier-discord")
 
 _PROMPT = """Apply to this job on behalf of the candidate described in profile.yaml (read it
 FIRST and use that person's name and details throughout — do not assume any other identity).
@@ -48,18 +51,25 @@ RESULT: FAILED <short reason>"""
 
 async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
     """Drive a full application via claude -p + Playwright MCP. Returns
-    {success, result, raw}."""
+    {success, result, detail, raw}."""
     env = dict(os.environ)
-    env["HOME"] = "/home/claude"          # use the claude user's valid subscription creds
+    env["HOME"] = "/home/claude"          # workspace for the claude user
     env["IS_SANDBOX"] = "1"               # allow --dangerously-skip-permissions as root
     env.pop("ANTHROPIC_API_KEY", None)    # force OAuth subscription, not API key
+    # Auth is via CLAUDE_CODE_OAUTH_TOKEN from the bot env (the /home/claude stored
+    # creds are stale and 401). Warn loudly so a silent failure isn't misread.
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        logger.error("apply_via_mcp: CLAUDE_CODE_OAUTH_TOKEN not in env — claude -p will 401")
     cmd = [
         "claude", "-p", "--output-format", "text",
         "--mcp-config", os.path.join(MCP_DIR, ".mcp.json"), "--strict-mcp-config",
         _PROMPT.format(url=url, bay_area_rule=BAY_AREA_RULE),
     ]
+    logger.info("apply_via_mcp: starting apply for %s", url)
+    t0 = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=MCP_DIR, env=env,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     try:
@@ -69,8 +79,10 @@ async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
             proc.kill()
         except ProcessLookupError:
             pass
-        return {"success": False, "result": "TIMEOUT", "raw": ""}
+        logger.warning("apply_via_mcp: TIMED OUT after %ds for %s", timeout, url)
+        return {"success": False, "result": "TIMEOUT", "detail": "", "raw": ""}
 
+    elapsed = int(time.monotonic() - t0)
     text = (out or b"").decode("utf-8", "replace")
     m = re.search(r"RESULT:\s*(APPLIED|BLOCKED|FAILED)\b(.*)$", text, re.MULTILINE)
     if m:
@@ -80,4 +92,9 @@ async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
         low = text.lower()
         status = "APPLIED" if ("thank you for applying" in low or "application submitted" in low) else "UNKNOWN"
         detail = ""
+    logger.info("apply_via_mcp: rc=%s result=%s %s (%ds) %s",
+                proc.returncode, status, detail, elapsed, url)
+    if status in ("UNKNOWN", "FAILED"):
+        tail = text[-800:].replace("\n", " | ").strip()
+        logger.warning("apply_via_mcp: %s for %s — output tail: %s", status, url, tail or "<empty>")
     return {"success": status == "APPLIED", "result": status, "detail": detail, "raw": text[-600:]}

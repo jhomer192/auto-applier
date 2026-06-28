@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 
 MCP_DIR = "/opt/auto-applier"
 logger = logging.getLogger("auto-applier-discord")
@@ -59,13 +60,22 @@ async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 1200)
     env["HOME"] = "/home/claude"
     env["IS_SANDBOX"] = "1"
     env.pop("ANTHROPIC_API_KEY", None)
+    # The claude -p subprocess authenticates with CLAUDE_CODE_OAUTH_TOKEN from the
+    # bot's env (the /home/claude stored creds are stale and 401). Warn loudly if
+    # it's missing so a silent empty result isn't mistaken for "no jobs".
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        logger.error("job_finder: CLAUDE_CODE_OAUTH_TOKEN not in env — claude -p will 401")
     cmd = [
         "claude", "-p", "--output-format", "text",
         "--mcp-config", os.path.join(MCP_DIR, ".mcp.json"), "--strict-mcp-config",
         prompt,
     ]
+    logger.info("job_finder: launching search (query=%r, max=%d, timeout=%ds)",
+                query or "<profile desired_roles>", max_results, timeout)
+    t0 = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=MCP_DIR, env=env,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     try:
@@ -75,11 +85,18 @@ async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 1200)
             proc.kill()
         except ProcessLookupError:
             pass
-        logger.warning("job_finder: search timed out after %ds", timeout)
+        logger.warning("job_finder: search TIMED OUT after %ds — killed", timeout)
         return []
 
+    elapsed = int(time.monotonic() - t0)
     text = out.decode("utf-8", errors="replace") if out else ""
-    return _parse_urls(text, max_results)
+    urls = _parse_urls(text, max_results)
+    logger.info("job_finder: rc=%s, %d urls, %ds", proc.returncode, len(urls), elapsed)
+    if not urls:
+        # Surface WHY (auth error, captcha, refusal, empty) instead of a silent zero.
+        tail = text[-1000:].replace("\n", " | ").strip()
+        logger.warning("job_finder: 0 urls (rc=%s) — output tail: %s", proc.returncode, tail or "<empty>")
+    return urls
 
 
 def _parse_urls(text: str, max_results: int) -> list[str]:
