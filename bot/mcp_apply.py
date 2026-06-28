@@ -17,7 +17,9 @@ from bot.bay_area import BAY_AREA_RULE
 
 MCP_DIR = "/opt/auto-applier"
 
-_PROMPT = """Apply to this job for Jack Homer, end to end, autonomously. URL: {url}
+_PROMPT = """Apply to this job on behalf of the candidate described in profile.yaml (read it
+FIRST and use that person's name and details throughout — do not assume any other identity).
+Apply end to end, autonomously. URL: {url}
 
 Use the playwright MCP browser tools (mcp__playwright__*) and the repo files in this directory.
 
@@ -28,8 +30,9 @@ Steps:
 2. LOCATION CHECK (mandatory, before filling anything): apply the LOCATION RESTRICTION above.
    If the role is not in the Bay Area, report RESULT: BLOCKED not-bay-area and stop — do not fill or submit.
 3. Read profile.yaml for Jack's details.
-4. Fill ALL fields: name, email, phone, current company C3 AI, current title Forward Deployed Engineer,
-   LinkedIn, GitHub, location, and strong truthful answers to any essay/custom questions drawn from his summary.
+4. Fill ALL fields from profile.yaml: name, email, phone, location, current company and title
+   (from work_history), education, certifications, links, and strong TRUTHFUL answers to any
+   essay/custom questions drawn from their summary/experience. Use ONLY facts present in profile.yaml.
 5. Handle dropdowns by clicking and selecting the option by visible text. Visa sponsorship = No.
    Demographics/EEO = Decline to self-identify. Never lie on any field.
 6. Attach the resume: upload data/resume.pdf to the Resume/CV field.
