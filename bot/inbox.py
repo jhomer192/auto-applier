@@ -9,6 +9,7 @@ a Gmail App Password.
 import asyncio
 import email as email_lib
 import email.header
+import email.message
 import email.utils
 import imaplib
 import logging
