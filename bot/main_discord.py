@@ -51,8 +51,8 @@ def main() -> None:
         )
         raise SystemExit(1)
 
-    # Scoped applicants (e.g. zvessey) — may use ONLY /email to register their own
-    # mailbox; everything else stays Jack-only. Comma/space separated user IDs.
+    # Scoped applicants (e.g. zvessey) — may register their own mailbox and run job
+    # hunts for themselves; the legacy slash commands stay Jack-only. Comma/space ids.
     applicant_ids = {
         int(t) for t in os.getenv("APPLICANT_USER_IDS", "").replace(",", " ").split() if t.isdigit()
     }

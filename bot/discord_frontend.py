@@ -54,8 +54,9 @@ class ApplierDiscord(discord.Client):
         super().__init__(intents=intents)
         self._channel_id = channel_id
         self._jack_id = jack_id
-        # Scoped applicants (e.g. zvessey) may use ONLY /email to register their own
-        # mailbox; everything else (applies, search, force) stays Jack-only.
+        # Scoped applicants (e.g. zvessey) can register their own mailbox (an email
+        # address triggers /email) and run job hunts for themselves (any other plain
+        # message). Jack-only: the legacy slash commands (/status, /force, …).
         self._applicant_ids = set(applicant_ids or set())
         self._env_path = env_path
         self._bot_data = bot_data
@@ -64,7 +65,8 @@ class ApplierDiscord(discord.Client):
         self._messenger: Optional[Messenger] = None
         self._app: Optional[FakeApp] = None
         self._loops_started = False
-        self._hunt_running = False  # one job-hunt (find+apply) at a time
+        self._hunt_running = False       # one job-hunt (find+apply) at a time
+        self._hunt_task = None           # strong ref so the bg task isn't GC'd mid-run
         # PTB processes updates sequentially (concurrent_updates=False by default);
         # the handlers + handle_text state machine freely mutate shared user_data/
         # bot_data under that guarantee. discord.py instead dispatches every
@@ -127,13 +129,19 @@ class ApplierDiscord(discord.Client):
             return
 
         content = (message.content or "").strip()
+        if not content:
+            return  # ignore empty / attachment-only messages (never auto-trigger a hunt)
         low = content.lower()
         tokens = content.split()
 
-        # (a) Email registration: explicit /email, or an applicant pasting
-        #     "<address> <app-password>" (an @-address as the first token).
+        # (a) Email registration: explicit /email, or a message from an applicant
+        #     whose FIRST token is an email address (sets the forms address, or full
+        #     IMAP creds if a password follows). Job-hunt phrasings never start with
+        #     an @-address, so this won't swallow a search request.
+        # `<= 3 tokens` keeps prose like "me@x.com please find me a job" out of the
+        # email path (that's a hunt); a real submission is "<addr> [password] [host]".
         is_email_msg = low.startswith("/email") or (
-            not is_jack and len(tokens) >= 2 and "@" in tokens[0] and "." in tokens[0]
+            not is_jack and len(tokens) <= 3 and "@" in tokens[0] and "." in tokens[0]
         )
         if is_email_msg:
             async with self._dispatch_lock:
@@ -141,9 +149,10 @@ class ApplierDiscord(discord.Client):
                 await self._handle_email(message, body)
             return
 
-        # (b) Job hunt: a plain message, or /find|/apply|/hunt|/jobs <query>. The
-        #     candidate just messages what they want; the agent finds Bay Area roles
-        #     and applies to all of them. Runs in the background so it never blocks.
+        # (b) Job hunt: a plain message, or /find|/apply|/hunt|/jobs <query>. BOTH
+        #     Jack and the scoped applicant can trigger it — the candidate just
+        #     messages what they want and the agent finds Bay Area roles and applies
+        #     to all of them. Runs in the background so it never blocks the bot.
         is_hunt_cmd = any(low.startswith(p) for p in ("/find", "/apply", "/hunt", "/jobs"))
         if is_hunt_cmd or not content.startswith("/"):
             query = (content.split(None, 1)[1].strip() if (is_hunt_cmd and len(tokens) > 1)
@@ -196,7 +205,9 @@ class ApplierDiscord(discord.Client):
             )
             return
         self._hunt_running = True
-        asyncio.create_task(self._run_hunt(query))
+        # Keep a strong reference: a bare create_task() can be garbage-collected
+        # mid-run, which would skip _run_hunt's finally and wedge _hunt_running=True.
+        self._hunt_task = asyncio.create_task(self._run_hunt(query))
 
     async def _run_hunt(self, query: str) -> None:
         try:
@@ -220,7 +231,7 @@ class ApplierDiscord(discord.Client):
                     pass
                 fresh.append(u)
             await self._messenger._send_text(
-                f"Found {len(urls)} postings ({len(fresh)} new). Applying as Zachary to all of them…"
+                f"Found {len(urls)} postings ({len(fresh)} new). Applying to all of them…"
             )
             from bot.mcp_apply import apply_via_mcp
             applied = blocked = failed = 0
@@ -232,6 +243,8 @@ class ApplierDiscord(discord.Client):
                     await self._messenger._send_text(f"❌ error on {u}: {type(exc).__name__}")
                     continue
                 result = (res.get("result") or "").strip()
+                detail = (res.get("detail") or "").strip()
+                line = f"{result} {detail}".strip() or "done"
                 await self._record_apply(u, res)
                 if res.get("success"):
                     applied += 1; emoji = "✅"
@@ -239,7 +252,7 @@ class ApplierDiscord(discord.Client):
                     blocked += 1; emoji = "⛔"
                 else:
                     failed += 1; emoji = "❌"
-                await self._messenger._send_text(f"{emoji} {result or 'done'}\n{u}")
+                await self._messenger._send_text(f"{emoji} {line}\n{u}")
             await self._messenger._send_text(
                 f"\U0001f3c1 Done — {applied} applied, {blocked} skipped (not Bay Area / closed), {failed} failed."
             )
@@ -259,6 +272,7 @@ class ApplierDiscord(discord.Client):
         from datetime import datetime, timezone
         from bot.models import ApplicationRecord
         result = (res.get("result") or "").strip()
+        detail = (res.get("detail") or "").strip()
         status = "applied" if res.get("success") else (
             "skipped" if result.lower().startswith("blocked") else "failed")
         try:
@@ -266,7 +280,7 @@ class ApplierDiscord(discord.Client):
                 url=url, title="", company="", site="mcp",
                 status=status,
                 applied_at=datetime.now(timezone.utc).isoformat() if status == "applied" else None,
-                notes=result[:500],
+                notes=f"{result} {detail}".strip()[:500],
             ))
         except Exception:  # noqa: BLE001
             logger.exception("could not record apply for %s", url)

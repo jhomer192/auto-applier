@@ -1052,7 +1052,7 @@ async def run_conversation_turn(
                                is_resume, session_id, e)
                 # If the session-id was unknown (resume mismatch), wipe our
                 # bookkeeping and retry once with --session-id (fresh session).
-                if "no such session" in str(e).lower() or "session not found" in str(e).lower():
+                if "no such session" in str(e).lower() or "session not found" in str(e).lower() or "no conversation found" in str(e).lower():
                     logger.info("session resume mismatch; restarting session")
                     async with aiosqlite.connect(db._path) as conn:
                         await conn.execute("DELETE FROM chat_sessions WHERE chat_id=?", (chat_id,))

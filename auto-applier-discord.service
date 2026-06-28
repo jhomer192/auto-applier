@@ -1,0 +1,34 @@
+[Unit]
+Description=Auto Job Applier Discord Bot
+After=network-online.target
+Wants=network-online.target
+# Mutually exclusive with the Telegram front-end: both poll the same Gmail inbox
+# and write the same SQLite DB, so they must never run together. Starting this
+# unit stops auto-applier.service first (the safe cutover direction).
+Conflicts=auto-applier.service
+
+[Service]
+Type=simple
+WorkingDirectory=REPO_PATH_PLACEHOLDER
+ExecStart=PYTHON_PATH_PLACEHOLDER -m bot.main_discord
+# Restart=always (not on-failure): the bot intentionally exits 0 via self.close()
+# when on_ready can't resolve the channel, and we still want systemd to retry.
+Restart=always
+RestartSec=10
+# But a genuine config crash (missing token/channel → SystemExit(1)) would
+# otherwise restart every 10s forever and never show as 'failed'. Latch failed
+# after 5 restarts in 120s so a crash-loop is distinguishable from a healthy bot.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+EnvironmentFile=REPO_PATH_PLACEHOLDER/.env
+# The Claude CLI subprocess refuses to run as root unless IS_SANDBOX=1, and needs
+# a writable HOME. These mirror the live auto-applier unit; keep them here so a
+# fresh deploy authenticates Claude instead of failing every turn. (Auth itself —
+# CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — comes from the EnvironmentFile.)
+Environment=HOME=/home/claude
+Environment=IS_SANDBOX=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

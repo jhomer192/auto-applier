@@ -1,0 +1,5 @@
+# Lessons
+
+- Never `pkill -f "<shared exec pattern>"` (e.g. `dist/index.js`) on the VPS — the assistant bot `claude-bot.service` runs the same `node dist/index.js` line, so a broad match kills it too. Stop services via `systemctl stop`, or target a specific PID/cgroup, never a fuzzy pattern shared across units.
+- Deploy instruction/config changes to the target BEFORE launching a run that reads them. The first xAI apply was launched while the old `CLAUDE.md` ("don't use raw Playwright, use the stealth engine") was still on the VPS, so the model avoided the MCP and rabbit-holed. `claude -p` loads `CLAUDE.md` at process start — order the deploy first.
+- Don't fight ATS form widgets (react-select, hydration, dropdowns) with hardcoded Playwright selectors — let the thinking model drive the Playwright MCP and pick options by visible text. The stealth layer's `navigator` overrides also froze react-select hydration; vanilla MCP works and Greenhouse/Lever/Ashby don't captcha a plain browser on direct applies.

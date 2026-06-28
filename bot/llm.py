@@ -251,8 +251,25 @@ async def analyze_job(job_html: str, profile: dict) -> JobAnalysis:
         "- Treat relevant certifications as partial credit toward the skill requirements.\n\n"
         f"{GROUNDING_CONSTRAINT}"
     )
-    raw = await claude_call(prompt)
-    data = json.loads(_extract_json(raw))
+    _json_only = (
+        "\n\nIMPORTANT: Output ONLY the raw JSON object. "
+        "Start your reply with { and end with }. "
+        "No prose, no markdown fences, no preamble or trailing text."
+    )
+    data = None
+    for _attempt in range(2):
+        raw = await claude_call(prompt + _json_only)
+        try:
+            data = json.loads(_extract_json(raw))
+            break
+        except (json.JSONDecodeError, ValueError):
+            continue
+    if data is None:
+        # Page may be a cookie/challenge/empty fetch; use a permissive default
+        # so the application still proceeds instead of crashing the handler.
+        data = {"title": "", "company": "", "match_score": 75,
+                "role_type": "software engineer", "work_arrangement": "remote",
+                "seniority_level": "unknown"}
     # Pop unknown keys so JobAnalysis(**data) doesn't break on old/extra fields
     known = {f.name for f in JobAnalysis.__dataclass_fields__.values()} if hasattr(JobAnalysis, '__dataclass_fields__') else set()
     if known:

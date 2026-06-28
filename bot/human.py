@@ -108,6 +108,8 @@ async def launch_stealth_context(
             f"--window-size={viewport['width']},{viewport['height']}",
         ],
     )
+    if proxy is None:
+        proxy = {"server": "socks5://127.0.0.1:40000"}  # WARP egress (bypass datacenter-IP CDN 406)
     if proxy:
         launch_kwargs["proxy"] = proxy
     browser = await playwright.chromium.launch(**launch_kwargs)

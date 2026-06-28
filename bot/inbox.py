@@ -1,12 +1,9 @@
-"""Gmail inbox poller and SMTP sender.
+"""Gmail inbox reader (READ-ONLY).
 
-Uses only Python stdlib (imaplib, smtplib, email) — no extra dependencies.
-Authentication is via Gmail App Password, so normal Gmail access is unaffected.
-
-Setup:
-  1. Enable 2FA on the Gmail account
-  2. Generate an App Password at https://myaccount.google.com/apppasswords
-  3. Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env
+IMAP read only — there is deliberately NO send path here. Sending mail from an
+applicant's personal mailbox caused a real incident; the only mail this tool ever
+performs is reading (used by the apply-time verification-code reader). Auth is via
+a Gmail App Password.
 """
 
 import asyncio
@@ -15,10 +12,6 @@ import email.header
 import email.utils
 import imaplib
 import logging
-import smtplib
-import uuid
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from bot.models import EmailThread
 
@@ -26,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
 
 # ── Email classification ──────────────────────────────────────────────────────
 
@@ -159,17 +150,13 @@ def _extract_plain_body(msg: email_lib.message.Message) -> str:
 
 class GmailInbox:
     def __init__(self, address: str, app_password: str, *,
-                 imap_host: str = IMAP_HOST, imap_port: int = IMAP_PORT,
-                 smtp_host: str | None = None, smtp_port: int = SMTP_PORT) -> None:
+                 imap_host: str = IMAP_HOST, imap_port: int = IMAP_PORT) -> None:
         self._address = address
         self._app_password = app_password
         # Host-configurable so the same class serves Gmail and the Network Solutions
-        # mailbox (jack@homerfamily.com). SMTP is derived from IMAP when not given —
-        # imap.gmail.com -> smtp.gmail.com, netsol-imap-oxcs -> netsol-smtp-oxcs.
+        # mailbox (jack@homerfamily.com).
         self._imap_host = imap_host
         self._imap_port = imap_port
-        self._smtp_host = smtp_host or imap_host.replace("imap", "smtp")
-        self._smtp_port = smtp_port
 
     # ── IMAP polling ─────────────────────────────────────────────────────────
 
@@ -239,15 +226,3 @@ class GmailInbox:
         """Async wrapper around IMAP fetch. Returns new unseen messages."""
         return await asyncio.to_thread(self._fetch_unseen_messages)
 
-    # ── SMTP sending — PERMANENTLY DISABLED ────────────────────────────────────
-    # This applier must NEVER send email from the configured mailbox. The inbox is
-    # an applicant's personal account; auto-replying to it once sent nonsense to
-    # marketing/no-reply addresses. The IMAP READ path above stays (used ONLY by the
-    # apply-time verification-code reader), but every send path is hard-removed so no
-    # code path — present or future — can put mail in someone's outbox.
-
-    async def send_reply(self, thread: EmailThread, body: str) -> None:  # noqa: ARG002
-        raise RuntimeError(
-            "Outbound email is permanently disabled in this applier — it must never "
-            "send mail from the applicant's mailbox."
-        )

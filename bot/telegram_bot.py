@@ -26,7 +26,7 @@ from bot.fit import evaluate_fit, fit_summary_lines, score_breakdown
 from bot.inbox import classify_email, GmailInbox
 from bot.llm import analyze_job, claude_call, draft_outreach_message, extract_achievements, extract_voice_profile, generate_cover_letter, generate_field_answer, generate_interview_prep, LLMError, tailor_resume
 from bot.voice import load_voice_profile, save_voice_profile, voice_profile_summary
-from bot.models import ApplicationRecord, EmailThread, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
+from bot.models import ApplicationRecord, FitReport, JobPreferences, PendingJob, QueuedJob, SavedSearch
 from bot.referral_radar import find_referral_candidates
 from bot.profile import load_preferences, save_preferences
 from bot.scam_detector import check_scam
@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # Conversation state keys stored in context.user_data
 PENDING_JOB = "pending_job"
 AWAITING_FIELD = "awaiting_field"
-AWAITING_EMAIL_REPLY = "awaiting_email_reply"  # value: EmailThread
 
 # Profile interview state
 PROFILE_INTERVIEW = "profile_interview"   # value: {"step": int, "answers": [(q, a), ...]}
@@ -393,31 +392,6 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         context.user_data.pop(AWAITING_FIELD, None)
         await update.message.reply_text("Cancelled.")
 
-    elif context.bot_data.get(AWAITING_EMAIL_REPLY):
-        queue: list = context.bot_data[AWAITING_EMAIL_REPLY]
-        queue.pop(0)
-        if not queue:
-            context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
-            await update.message.reply_text("Dismissed.")
-        else:
-            next_thread: EmailThread = queue[0]
-            next_category = classify_email(next_thread)
-            preview = next_thread.body_preview.strip()[:300]
-            if next_category == "offer":
-                prompt_line = "Tell me how you'd like to respond \u2014 accept, decline, or counter."
-                header = "\U0001f389 *Job offer*"
-            else:
-                prompt_line = "Share your availability and I'll write the reply."
-                header = "\U0001f4e8 *Interview request*"
-            await update.message.reply_text(
-                f"{header}\n\n"
-                f"*From:* {next_thread.from_address}\n"
-                f"*Subject:* {next_thread.subject}\n\n"
-                f"{preview}\n\n"
-                f"{prompt_line} Or /cancel to ignore.",
-                parse_mode="Markdown",
-            )
-
     elif context.user_data.get(PROFILE_INTERVIEW):
         context.user_data.pop(PROFILE_INTERVIEW, None)
         await update.message.reply_text("Profile interview cancelled. Nothing was saved.")
@@ -735,12 +709,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if (text.startswith("[") or text.startswith("{")) and "linkedin" in text.lower() and len(text) < 100_000:
         ok, msg = _save_linkedin_auth(text)
         await update.message.reply_text(msg)
-        return
-
-    # Case 1a: waiting for a recruiter email reply from the user
-    # (stored as a queue in bot_data because background tasks can't access user_data)
-    if context.bot_data.get(AWAITING_EMAIL_REPLY):
-        await _handle_email_reply(update, context, text)
         return
 
     # Case 1b: voice fingerprinting interview in progress
@@ -1235,7 +1203,7 @@ async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             "Voice profile cleared. Starting fresh calibration.\n\n"
             f"*Question 1 of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[0]}",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         context.user_data[VOICE_INTERVIEW] = {"step": 0, "samples": []}
         return
@@ -1264,7 +1232,7 @@ async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "like you're texting a friend. The answers stay local and are only used to "
         "make your cover letters sound like you.\n\n"
         f"*Question 1 of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[0]}",
-        parse_mode="Markdown",
+        parse_mode=None,
     )
 
 
@@ -1292,7 +1260,7 @@ async def _handle_voice_answer(
     if step < len(VOICE_PROMPTS):
         await update.message.reply_text(
             f"*Question {step + 1} of {len(VOICE_PROMPTS)}:*\n{VOICE_PROMPTS[step]}",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         return
 
@@ -1337,7 +1305,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "Let's add some achievements to your profile. I'll ask 4 quick questions — "
         "be as specific as you can. /cancel at any time to quit.\n\n"
         f"*Question 1 of {len(_PROFILE_QUESTIONS)}:*\n{_PROFILE_QUESTIONS[0]}",
-        parse_mode="Markdown",
+        parse_mode=None,
     )
 
 
@@ -1359,7 +1327,7 @@ async def _handle_profile_answer(
     if step < len(_PROFILE_QUESTIONS):
         await update.message.reply_text(
             f"*Question {step + 1} of {len(_PROFILE_QUESTIONS)}:*\n{_PROFILE_QUESTIONS[step]}",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         return
 
@@ -1499,6 +1467,37 @@ async def _handle_job_url(
         await update.message.reply_text(f"Auto-skipped: {fit.hard_pass_reason}")
         return
 
+    # ── Model-driven apply (replaces obsolete hardcoded adapters) ──────────────
+    # The 2026-05 adapters scrape 0 fields from modern ATS forms; drive the
+    # browser with claude -p + Playwright MCP instead (the proven engine).
+    await update.message.reply_text(f"Applying to {job_info.company} - {job_info.title}...")
+    from bot.mcp_apply import apply_via_mcp
+    try:
+        res = await apply_via_mcp(url)
+    except Exception as e:
+        res = {"success": False, "result": "FAILED", "detail": str(e)[:120], "raw": ""}
+    if res["success"]:
+        status = "applied"
+    elif res["result"] == "BLOCKED":
+        status = "skipped"
+    else:
+        status = "failed"
+    await db.insert_application(ApplicationRecord(
+        url=url,
+        title=job_info.title,
+        company=job_info.company,
+        site=adapter.name,
+        status=status,
+        notes=(res.get("result", "") + " " + res.get("detail", "")).strip()[:300],
+    ))
+    if res["success"]:
+        await update.message.reply_text(f"Applied: {job_info.company} - {job_info.title} ({url})")
+    else:
+        await update.message.reply_text(
+            f"{res.get('result','FAILED')}: {job_info.company} - {job_info.title}. {res.get('detail','')}".strip()
+        )
+    return
+
     # Load voice profile once for all LLM calls in this flow
     voice_profile = load_voice_profile()
 
@@ -1572,7 +1571,7 @@ async def _handle_job_url(
             f"Auto-applying to *{job_info.title}* at *{job_info.company}* "
             f"(score {job_analysis.match_score}/100 \u2265 threshold {prefs.auto_apply_threshold})\n"
             + (f"{summary}\n" if summary else ""),
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         await _submit_application(update, context, pending)
         return
@@ -1640,7 +1639,7 @@ async def _handle_job_url(
         f"{cover_preview}"
         f"{manual_note}\n\n"
         "Apply? Y / N",
-        parse_mode="Markdown",
+        parse_mode=None,
     )
 
 
@@ -1659,7 +1658,7 @@ async def _proceed_with_application(
             f"I need a few answers before I can apply.\n\n"
             f"*{form_field.label}*: This field is required but is not in your profile.\n\n"
             "Please answer:",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         return
 
@@ -1691,249 +1690,13 @@ async def _handle_field_answer(
         next_field = pending.awaiting_fields[pending.current_field_index]
         await update.message.reply_text(
             f"*{next_field.label}*: Please answer:",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         return
 
     # All user-provided fields answered — submit
     context.user_data.pop(AWAITING_FIELD, None)
     await _submit_application(update, context, pending)
-
-
-async def _handle_email_reply(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    text: str,
-) -> None:
-    """Send user's reply to the recruiter, composing a professional scheduling
-    email via Claude when the thread is an interview or offer."""
-    queue: list = context.bot_data.get(AWAITING_EMAIL_REPLY, [])
-    if not queue:
-        return
-    thread: EmailThread = queue.pop(0)
-    if not queue:
-        context.bot_data.pop(AWAITING_EMAIL_REPLY, None)
-    inbox: GmailInbox | None = context.bot_data.get("gmail_inbox")
-    db: ApplicationDB = context.bot_data["db"]
-    profile: dict = context.bot_data["profile"]
-
-    if not inbox:
-        await update.message.reply_text("Gmail not configured — reply not sent.")
-        return
-
-    # For interview/offer threads, use Claude to compose a professional reply
-    body = text
-    category = classify_email(thread)
-    if category in ("interview", "offer"):
-        await update.message.reply_text("Composing reply...")
-        try:
-            if category == "offer":
-                body = await _compose_offer_reply(thread, text, profile)
-            else:
-                body = await _compose_scheduling_reply(thread, text, profile)
-        except LLMError as e:
-            logger.warning("Could not compose reply: %s — sending raw text", e)
-            body = text
-
-    try:
-        await inbox.send_reply(thread, body)
-        await db.insert_outbound_email(
-            thread_id=thread.thread_id,
-            to_address=thread.from_address,
-            subject=thread.subject,
-            body=body,
-        )
-        # Echo what was sent so the user knows exactly what went out
-        await reply_chunked(update.message, f"Sent to {thread.from_address}:\n\n{body}")
-    except Exception as e:
-        logger.error("Failed to send email reply: %s", e)
-        await update.message.reply_text(f"Failed to send reply: {e}")
-
-    # If more emails are queued, prompt for the next one now
-    remaining: list = context.bot_data.get(AWAITING_EMAIL_REPLY, [])
-    if remaining:
-        next_thread = remaining[0]
-        next_category = classify_email(next_thread)
-        preview = next_thread.body_preview.strip()[:300]
-        if next_category == "offer":
-            prompt_line = "Tell me how you'd like to respond \u2014 accept, decline, or counter."
-            header = "\U0001f389 *Job offer*"
-        else:
-            prompt_line = "Share your availability and I'll write the reply."
-            header = "\U0001f4e8 *Interview request*"
-        await update.message.reply_text(
-            f"{header}\n\n"
-            f"*From:* {next_thread.from_address}\n"
-            f"*Subject:* {next_thread.subject}\n\n"
-            f"{preview}\n\n"
-            f"{prompt_line} Or /cancel to ignore.",
-            parse_mode="Markdown",
-        )
-
-
-_EMAIL_INJECTION_MARKERS = ["CONSTRAINT:", "NEEDS_USER_INPUT", "PROFILE:", "FORM FIELD:"]
-
-
-def _sanitize_email_text(text: str) -> str:
-    """Strip prompt-injection markers from recruiter email content before it
-    enters an LLM prompt. Mirrors the sentinel check in llm._sanitize_profile."""
-    for marker in _EMAIL_INJECTION_MARKERS:
-        text = text.replace(marker, "[REDACTED]")
-    return text
-
-
-async def _compose_offer_reply(
-    thread: EmailThread,
-    user_input: str,
-    profile: dict,
-) -> str:
-    """Use Claude CLI to write a professional offer response.
-
-    user_input is the user's intent: accept / decline / counter with details.
-    Includes salary context (target_salary from preferences) when countering.
-    """
-    name = profile.get("name", "")
-    safe_body = _sanitize_email_text(thread.body_preview)
-
-    # Include salary context so Claude can reference target numbers when countering
-    prefs = load_preferences(profile)
-    salary_context = ""
-    if prefs.target_salary:
-        salary_context = f"CANDIDATE'S TARGET SALARY: ${prefs.target_salary:,} per year\n"
-    elif prefs.min_salary:
-        salary_context = f"CANDIDATE'S MINIMUM ACCEPTABLE SALARY: ${prefs.min_salary:,} per year\n"
-
-    prompt = (
-        f"Write a short, professional reply to a job offer email.\n\n"
-        f"OFFER EMAIL:\n"
-        f"From: {thread.from_address}\n"
-        f"Subject: {thread.subject}\n"
-        f"Message: {safe_body}\n\n"
-        f"CANDIDATE NAME: {name}\n"
-        f"{salary_context}\n"
-        f"CANDIDATE'S INTENT:\n{user_input}\n\n"
-        "Write ONLY the email body (no subject line, no headers).\n"
-        "Keep it to 3-5 sentences. Be warm and professional.\n"
-        "If accepting: express genuine enthusiasm and confirm any next steps.\n"
-        "If declining: be gracious and keep the door open.\n"
-        "If countering: state the counter clearly and professionally, "
-        "framing it as a question rather than a demand. "
-        "If a target salary is provided above, use it as the counter number "
-        "unless the candidate's intent specifies a different amount.\n"
-        "Use the candidate's intent exactly — do not invent details."
-    )
-    return await claude_call(prompt)
-
-
-async def _compose_scheduling_reply(
-    thread: EmailThread,
-    user_input: str,
-    profile: dict,
-) -> str:
-    """Use Claude CLI to write a professional scheduling reply.
-
-    user_input is the user's raw availability / intent (e.g. 'Tuesday 2-4pm or
-    Thursday morning, prefer video call'). Claude turns it into a polished email.
-    """
-    name = profile.get("name", "")
-    safe_body = _sanitize_email_text(thread.body_preview)
-    prompt = (
-        f"Write a short, professional reply to a recruiter interview request.\n\n"
-        f"RECRUITER EMAIL:\n"
-        f"From: {thread.from_address}\n"
-        f"Subject: {thread.subject}\n"
-        f"Message: {safe_body}\n\n"
-        f"CANDIDATE NAME: {name}\n\n"
-        f"CANDIDATE'S AVAILABILITY / INTENT:\n{user_input}\n\n"
-        "Write ONLY the email body (no subject line, no 'Subject:', no headers).\n"
-        "Keep it to 3-5 sentences. Be warm and professional.\n"
-        "Confirm interest in the role, share the availability exactly as given, "
-        "and close with a thank-you."
-    )
-    return await claude_call(prompt)
-
-
-async def notify_new_emails(app: Application) -> None:
-    """Called from the background polling loop. Checks DB for unnotified inbound
-    emails and sends a Telegram message for each one, prompting the user to reply.
-
-    The last notified thread is stored in bot_data[AWAITING_EMAIL_REPLY] so the
-    next free-text message the user sends becomes the reply.
-    """
-    db: ApplicationDB = app.bot_data["db"]
-    chat_id: int = app.bot_data["authorized_user_id"]
-    bot = app.bot
-
-    pending = await db.get_unnotified_emails()
-    for email_thread in pending:
-        category = classify_email(email_thread)
-        logger.info(
-            "inbox: email from %s classified as %r (subject: %r)",
-            email_thread.from_address, category, email_thread.subject,
-        )
-
-        if category not in ("interview", "offer"):
-            # Silently mark read — rejections and confirmations don't need a reply
-            await db.mark_email_notified(email_thread.id)
-            continue
-
-        preview = email_thread.body_preview.strip()[:300]
-        if category == "offer":
-            prompt_line = (
-                "Tell me how you'd like to respond \u2014 accept, decline, or negotiate "
-                "(e.g. \"accept\" / \"decline\" / \"counter at $X, start date Y\") "
-                "and I'll write the reply."
-            )
-            header = "\U0001f389 *Job offer*"
-        else:
-            prompt_line = (
-                "Share your availability and I'll write the reply \u2014 e.g. "
-                "\"Tuesday 2\u20135pm or Thursday morning, prefer video call\"."
-            )
-            header = "\U0001f4e8 *Interview request*"
-
-        text = (
-            f"{header}\n\n"
-            f"*From:* {email_thread.from_address}\n"
-            f"*Subject:* {email_thread.subject}\n\n"
-            f"{preview}\n\n"
-            f"{prompt_line}\n"
-            f"Or type a full reply. /cancel to ignore."
-        )
-        try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-            await db.mark_email_notified(email_thread.id)
-            # Append to queue so multiple emails in one poll are all handled
-            queue: list = app.bot_data.setdefault(AWAITING_EMAIL_REPLY, [])
-            queue.append(email_thread)
-
-            # Interview invite → send a tailored prep guide immediately
-            if category == "interview":
-                try:
-                    # Pull company/title from the linked application if available
-                    app_record = None
-                    if email_thread.app_id:
-                        app_record = await db.get_by_id(email_thread.app_id)
-
-                    company = app_record.company if app_record else email_thread.from_address
-                    title = app_record.title if app_record else email_thread.subject
-                    context_text = (
-                        f"Email subject: {email_thread.subject}\n"
-                        f"Email preview: {email_thread.body_preview}\n"
-                    )
-                    if app_record and app_record.cover_letter:
-                        context_text += f"\nCover letter sent:\n{app_record.cover_letter[:800]}"
-
-                    prep = await generate_interview_prep(company, title, context_text)
-                    await send_chunked(
-                        bot,
-                        chat_id,
-                        f"📚 Interview prep — {title} at {company}:\n\n{prep}",
-                    )
-                except Exception as prep_err:
-                    logger.warning("notify_new_emails: interview prep failed: %s", prep_err)
-        except Exception as e:
-            logger.error("notify_new_emails: failed to send notification: %s", e)
 
 
 async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
@@ -1992,7 +1755,7 @@ async def notify_search_matches(app: Application, linkedin_auth: str) -> None:
         await bot.send_message(
             chat_id=chat_id,
             text=_build_batch_message(pending_jobs, total_new),
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         app.bot_data[PENDING_BATCH] = pending_jobs
     except Exception as e:
@@ -2177,7 +1940,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if permanent_failed:
             extra_lines.append(f"{permanent_failed} job(s) failed after 3 attempts (won't retry).")
         msg += "\n\n_" + " ".join(extra_lines) + "_"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode=None)
 
 
 @requires_auth
