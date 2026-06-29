@@ -130,7 +130,9 @@ def build_job_tools(bot):
         if not urls:
             return _ok("Nothing to apply to — run find_jobs first, or give me a role to search for.")
 
-        bot.start_batch(urls)
+        if not bot.start_batch(urls):
+            return _ok(f"A batch is already running ({bot.batch_done} done so far) — I'll keep "
+                       "going through it and post each result here. No second batch started.")
         who = bot.candidate_name or "the candidate"
         return _ok(f"Started applying to {len(urls)} Bay-Area role(s) as {who}. I'll post each "
                    "result here as it completes, and tell you when the batch is done.")

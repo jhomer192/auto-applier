@@ -15,18 +15,19 @@ import os
 import re
 import time
 
-from bot.bay_area import BAY_AREA_RULE
+from bot.bay_area import BAY_AREA_RULE, is_bay_area
 
 MCP_DIR = "/opt/auto-applier"
 logger = logging.getLogger("auto-applier-discord")
 
 # Phrases the claude CLI prints when the Max subscription is out of quota for the
-# window. Matched only when there's no RESULT line, so a job whose essay text
-# happens to contain "rate limit" can't be misread as a quota stop.
+# window. Kept SPECIFIC (no bare "rate limit") so a job whose page text mentions
+# rate limiting can't be misread as a quota stop — and only consulted when there's
+# no RESULT line AND the run returned almost instantly (a real quota stop is fast).
 _USAGE_LIMIT_PATTERNS = (
     "usage limit reached", "you've hit your", "you have hit your",
     "session limit", "claude usage limit", "out of credits",
-    "rate limit", "resets at", "/upgrade to increase",
+    "approaching your usage limit",
 )
 
 
@@ -40,6 +41,18 @@ def _usage_limit_reset(text: str) -> str:
     m = re.search(r"resets?(?:\s+at)?\s+([^\n.|]{1,40})", text, re.IGNORECASE)
     return f"resets {m.group(1).strip()}" if m else ""
 
+
+def _reported_location(text: str) -> str:
+    """The role location the apply agent reported (LOCATION: ...), if any."""
+    m = re.search(r"^LOCATION:\s*(.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def _scrub(text: str) -> str:
+    """Collapse to one line and mask digit runs (verification PINs) before logging —
+    the apply agent's stdout can echo a mailbox code or page content."""
+    return re.sub(r"\d{3,}", "####", (text or "").replace("\n", " | ")).strip()
+
 _PROMPT = """Apply to this job on behalf of the candidate described in profile.yaml (read it
 FIRST and use that person's name and details throughout — do not assume any other identity).
 Apply end to end, autonomously. URL: {url}
@@ -52,7 +65,7 @@ Steps:
 1. Open the URL. If it redirects to an error/closed page, report RESULT: BLOCKED job-closed.
 2. LOCATION CHECK (mandatory, before filling anything): apply the LOCATION RESTRICTION above.
    If the role is not in the Bay Area, report RESULT: BLOCKED not-bay-area and stop — do not fill or submit.
-3. Read profile.yaml for Jack's details.
+3. Read profile.yaml for the candidate's details.
 4. Fill ALL fields from profile.yaml: name, email, phone, location, current company and title
    (from work_history), education, certifications, links, and strong TRUTHFUL answers to any
    essay/custom questions drawn from their summary/experience. Use ONLY facts present in profile.yaml.
@@ -63,6 +76,7 @@ Steps:
 8. If a verification code / security PIN page appears, get the code with:
    node scripts/check_email.cjs --code --since 10m  (retry every 20s up to 8 minutes), enter it, confirm.
 9. Verify success — a confirmation page / "thank you for applying". Only then is it applied.
+Before the final line, output the role's location on its own line as:  LOCATION: <city, state/region>
 Report the FINAL outcome on the LAST line, EXACTLY one of:
 RESULT: APPLIED
 RESULT: BLOCKED <short reason>
@@ -104,23 +118,34 @@ async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
 
     elapsed = int(time.monotonic() - t0)
     text = (out or b"").decode("utf-8", "replace")
-    m = re.search(r"RESULT:\s*(APPLIED|BLOCKED|FAILED)\b(.*)$", text, re.MULTILINE)
-    if m:
+    matches = list(re.finditer(r"RESULT:\s*(APPLIED|BLOCKED|FAILED)\b(.*)$", text, re.MULTILINE))
+    if matches:
+        m = matches[-1]   # the real outcome is on the LAST line; ignore mid-run narration
         status = m.group(1)
         detail = (m.group(2) or "").strip()
-    elif _is_usage_limit(text):
-        # The Claude subscription hit its usage/session cap: the run returns almost
-        # instantly with no RESULT line. Surface this distinctly so the batch loop
-        # PAUSES honestly instead of recording a stream of fake UNKNOWN "failures".
-        status = "USAGE_LIMIT"
-        detail = _usage_limit_reset(text)
     else:
         low = text.lower()
-        status = "APPLIED" if ("thank you for applying" in low or "application submitted" in low) else "UNKNOWN"
-        detail = ""
+        if "thank you for applying" in low or "application submitted" in low:
+            status, detail = "APPLIED", ""
+        elif _is_usage_limit(text) and elapsed < 90:
+            # A real quota stop returns almost instantly with no RESULT line; a long
+            # apply that merely mentions limits in page text does not. PAUSE honestly
+            # instead of recording a stream of fake UNKNOWN "failures".
+            status, detail = "USAGE_LIMIT", _usage_limit_reset(text)
+        else:
+            status, detail = "UNKNOWN", ""
+
+    # Deterministic Bay-Area backstop: don't rely solely on the inner agent's own
+    # gate. If it reported a LOCATION, the code decides whether it's in the Bay Area.
+    if status == "APPLIED":
+        loc = _reported_location(text)
+        if loc and not is_bay_area(loc):
+            logger.warning("apply_via_mcp: override APPLIED→BLOCKED, location %r not Bay Area (%s)", loc, url)
+            status, detail = "BLOCKED", f"not-bay-area ({loc})"
+
     logger.info("apply_via_mcp: rc=%s result=%s %s (%ds) %s",
                 proc.returncode, status, detail, elapsed, url)
     if status in ("UNKNOWN", "FAILED"):
-        tail = text[-800:].replace("\n", " | ").strip()
-        logger.warning("apply_via_mcp: %s for %s — output tail: %s", status, url, tail or "<empty>")
-    return {"success": status == "APPLIED", "result": status, "detail": detail, "raw": text[-600:]}
+        logger.warning("apply_via_mcp: %s for %s — output tail: %s",
+                       status, url, _scrub(text[-800:]) or "<empty>")
+    return {"success": status == "APPLIED", "result": status, "detail": detail, "raw": _scrub(text[-600:])}

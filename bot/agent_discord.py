@@ -37,7 +37,8 @@ logger = logging.getLogger("auto-applier-discord")
 
 WORKING = "⏳ working…"
 LONG_OUTPUT_CHARS = 6000
-INIT_RETRIES = 2  # transient "Control request timeout: initialize" → rebuild + retry
+INIT_RETRIES = 2     # transient "Control request timeout: initialize" → rebuild + retry
+QUERY_TIMEOUT = 300  # hard cap on a single Claude turn so a wedged CLI can't lock the channel
 
 _SYSTEM_PROMPT = """You are the job-application assistant in Jack's private Discord, working on
 behalf of ONE candidate — the person described in profile.yaml (read it when you need their
@@ -63,8 +64,52 @@ How to behave:
 - HARD RULES (also enforced by the tools, so don't try to work around them): only San Francisco
   Bay-Area jobs, ever; only apply as the candidate in profile.yaml, never anyone else.
 - If a batch pauses because the Claude usage limit was hit, say so plainly and offer to continue
-  later — do not pretend the remaining jobs failed.
+  later — do not pretend the remaining jobs failed. To RESUME a paused batch, call apply_jobs with
+  no arguments (it picks up exactly where it left off).
 Be brief. No filler."""
+
+
+def _looks_like_email(tok: str) -> bool:
+    return "@" in tok and "." in tok.rsplit("@", 1)[-1]
+
+
+def _extract_app_password(tokens: list[str]) -> str:
+    """Return a Gmail app-password if these tokens contain one, else ''.
+
+    Gmail app passwords are 16 lowercase letters, shown as one block or as four
+    4-letter groups. Requiring that exact shape (not just 'some letters') is what
+    keeps ordinary prose that happens to mention an address from being treated as
+    a credential."""
+    alpha = [t for t in tokens if t.isalpha()]
+    for t in alpha:
+        if len(t) == 16:
+            return t.lower()
+    # any window of 4 consecutive 4-letter alpha tokens
+    for i in range(len(tokens) - 3):
+        window = tokens[i:i + 4]
+        if all(w.isalpha() and len(w) == 4 for w in window):
+            return "".join(window).lower()
+    return ""
+
+
+def find_credential(content: str):
+    """If *content* is an email registration (an explicit /email command, or an
+    address accompanied by an app-password-shaped secret), return (address,
+    password); otherwise None so the message goes to the model normally.
+
+    The point of catching it pre-model is to DELETE the secret from the channel
+    before it can be seen/stored — so detection is position-independent but must
+    see a real secret (or an explicit /email intent)."""
+    explicit = content.lower().startswith("/email")
+    body = content[len("/email"):].strip() if explicit else content
+    tokens = body.split()
+    address = next((t.strip(".,;") for t in tokens if _looks_like_email(t)), "")
+    password = _extract_app_password([t for t in tokens if not _looks_like_email(t)])
+    if explicit:
+        return (address, password)          # explicit registration (password optional)
+    if address and password:
+        return (address, password)          # a pasted credential to protect
+    return None
 
 
 def _chunks(text: str, limit: int = 2000) -> list[str]:
@@ -168,26 +213,39 @@ class ApplierAgent(discord.Client):
                 pass
 
     async def _ask_claude(self, prompt: str) -> str:
-        # Serialize queries (the SDK session holds the running conversation). Retry a
-        # transient init/connect failure once with a fresh client before surfacing it.
+        # Serialize queries (the SDK session holds the running conversation). Each
+        # attempt is bounded by QUERY_TIMEOUT so a hung claude CLI (never emits a
+        # ResultMessage) can't hold the lock — and thus the whole channel — forever.
+        # We only retry when the attempt failed BEFORE Claude produced anything, so a
+        # mid-stream failure never replays a side-effecting prompt (apply/set_email)
+        # onto a fresh, context-less session.
         async with self._lock:
             last_exc: Exception | None = None
             for attempt in range(1, INIT_RETRIES + 1):
-                try:
-                    client = await self._ensure_session()
+                produced = False
+                client = await self._ensure_session()
+
+                async def _run() -> str:
+                    nonlocal produced
                     await client.query(prompt)
                     parts: list[str] = []
                     async for msg in client.receive_response():
                         if isinstance(msg, AssistantMessage):
+                            produced = True  # Claude started responding/acting
                             for block in msg.content:
                                 if isinstance(block, TextBlock):
                                     parts.append(block.text)
                     return "".join(parts).strip()
-                except Exception as exc:  # noqa: BLE001
+
+                try:
+                    return await asyncio.wait_for(_run(), timeout=QUERY_TIMEOUT)
+                except Exception as exc:  # noqa: BLE001 (incl. TimeoutError)
                     last_exc = exc
                     logger.warning("claude query attempt %d/%d failed: %s",
                                    attempt, INIT_RETRIES, type(exc).__name__)
                     await self._drop_session()
+                    if produced:
+                        break  # don't replay a prompt Claude already started acting on
             raise last_exc if last_exc else RuntimeError("query failed")
 
     # ---- message handling ---------------------------------------------------
@@ -210,13 +268,13 @@ class ApplierAgent(discord.Client):
         if not content:
             return
 
-        # Credential safety: a message that STARTS with an email address is a
-        # deliberate mailbox registration (often "<addr> <app password>"). Delete it
-        # first so the secret leaves the channel, handle it directly, and never feed
-        # it to the model.
-        first = content.split()[0]
-        if "@" in first and "." in first and not content.startswith("/"):
-            await self._handle_email_message(message, content)
+        # Credential safety: if the message is an email registration carrying an app
+        # password (anywhere in it) or an explicit /email command, delete it FIRST so
+        # the secret leaves the channel, handle it directly, and never feed it to the
+        # model. Ordinary chat that merely mentions an address still reaches Claude.
+        cred = find_credential(content)
+        if cred is not None:
+            await self._handle_email_message(message, cred[0], cred[1])
             return
 
         await self._engage(message, content)
@@ -240,7 +298,16 @@ class ApplierAgent(discord.Client):
         await self._deliver(message, working, reply)
 
     async def _deliver(self, message: discord.Message, working: discord.Message | None, reply: str) -> None:
-        reply = reply or "(no output)"
+        reply = (reply or "").strip()
+        if not reply:
+            # Claude chose to stay silent (e.g. nothing to add) — honor that: drop the
+            # placeholder and post nothing, rather than emitting "(no output)" noise.
+            if working is not None:
+                try:
+                    await working.delete()
+                except discord.HTTPException:
+                    pass
+            return
         if len(reply) > LONG_OUTPUT_CHARS:
             if working is not None:
                 await working.edit(content="📄 full reply attached:")
@@ -268,12 +335,16 @@ class ApplierAgent(discord.Client):
 
     # ---- background apply batch --------------------------------------------
 
-    def start_batch(self, urls: list[str]) -> None:
+    def start_batch(self, urls: list[str]) -> bool:
+        """Launch a background apply batch. Returns False if one is already running,
+        so the caller never claims a batch started when it didn't."""
         if self.batch_running:
-            return
+            return False
         self.batch_running = True
         self.batch_done = 0
+        self.paused_remaining = []  # a fresh batch supersedes any abandoned pause
         self._batch_task = asyncio.create_task(self._run_batch(list(urls)))
+        return True
 
     async def _run_batch(self, urls: list[str]) -> None:
         from bot.mcp_apply import apply_via_mcp
