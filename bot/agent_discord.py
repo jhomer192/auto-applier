@@ -51,8 +51,23 @@ intro-level roles — breadth wins, don't hold out for a perfect-fit title (and 
 software engineer, so skip pure SWE/coding roles). When asked to "find jobs" with no specifics,
 cast a wide net across these lanes.
 
+SOURCING — be creative and resourceful; don't just lean on the built-in list. `find_jobs` is a
+fast default but it draws from a FIXED curated set of companies, so it returns a similar pool every
+time. To go wider (YC startups, Series A–B, niche/under-the-radar firms), use WebSearch + WebFetch:
+- WebSearch for Bay-Area companies/roles in the candidate's lanes, then FETCH their live ATS boards
+  directly — these return OPEN postings as JSON in seconds and are far more reliable than generic
+  search-result links (which are often stale/closed):
+    Greenhouse: https://boards-api.greenhouse.io/v1/boards/<token>/jobs
+    Lever:      https://api.lever.co/v0/postings/<token>?mode=json
+    Ashby:      https://api.ashbyhq.com/posting-api/job-board/<org>
+  (the <token>/<org> is usually the company slug; many startups use Ashby.)
+- Collect direct application URLs, sanity-check each looks OPEN and in the Bay Area, then apply with
+  apply_jobs(urls=[...]). Vary your sources between batches so you're not resurfacing the same
+  companies. Prefer live ATS boards over scraped search links.
+
 Your tools:
-- find_jobs(query): list current OPEN Bay-Area roles that fit the candidate (does not apply).
+- WebSearch / WebFetch: discover companies and pull their live job boards (your creative sourcing).
+- find_jobs(query): list current OPEN Bay-Area roles from the curated boards (fast default; does not apply).
 - apply_jobs(urls/query): apply on the candidate's behalf in the background; each result is
   posted to this channel as it lands. Use this when asked to apply.
 - application_status(): what you've actually applied to. Use this to ANSWER questions like
@@ -198,9 +213,13 @@ class ApplierAgent(discord.Client):
             "permission_mode": "bypassPermissions",
             "system_prompt": _SYSTEM_PROMPT,
         }
+        # WebSearch + WebFetch let Claude source creatively beyond the curated board
+        # list (scout startups/YC/niche boards, fetch live ATS APIs itself). Every
+        # apply still goes through the Bay-Area- + identity-gated engine, so giving the
+        # brain web tools doesn't widen the safety surface.
         if self._mcp_server is not None:
             opts["mcp_servers"] = {"jobs": self._mcp_server}
-            opts["allowed_tools"] = list(self._mcp_names)
+            opts["allowed_tools"] = ["WebSearch", "WebFetch", *self._mcp_names]
         return ClaudeAgentOptions(**opts)
 
     async def _ensure_session(self) -> ClaudeSDKClient:
