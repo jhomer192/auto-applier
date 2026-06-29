@@ -20,6 +20,26 @@ from bot.bay_area import BAY_AREA_RULE
 MCP_DIR = "/opt/auto-applier"
 logger = logging.getLogger("auto-applier-discord")
 
+# Phrases the claude CLI prints when the Max subscription is out of quota for the
+# window. Matched only when there's no RESULT line, so a job whose essay text
+# happens to contain "rate limit" can't be misread as a quota stop.
+_USAGE_LIMIT_PATTERNS = (
+    "usage limit reached", "you've hit your", "you have hit your",
+    "session limit", "claude usage limit", "out of credits",
+    "rate limit", "resets at", "/upgrade to increase",
+)
+
+
+def _is_usage_limit(text: str) -> bool:
+    low = text.lower()
+    return any(p in low for p in _USAGE_LIMIT_PATTERNS)
+
+
+def _usage_limit_reset(text: str) -> str:
+    """Best-effort extraction of the 'resets <when>' hint to show the user."""
+    m = re.search(r"resets?(?:\s+at)?\s+([^\n.|]{1,40})", text, re.IGNORECASE)
+    return f"resets {m.group(1).strip()}" if m else ""
+
 _PROMPT = """Apply to this job on behalf of the candidate described in profile.yaml (read it
 FIRST and use that person's name and details throughout — do not assume any other identity).
 Apply end to end, autonomously. URL: {url}
@@ -88,6 +108,12 @@ async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
     if m:
         status = m.group(1)
         detail = (m.group(2) or "").strip()
+    elif _is_usage_limit(text):
+        # The Claude subscription hit its usage/session cap: the run returns almost
+        # instantly with no RESULT line. Surface this distinctly so the batch loop
+        # PAUSES honestly instead of recording a stream of fake UNKNOWN "failures".
+        status = "USAGE_LIMIT"
+        detail = _usage_limit_reset(text)
     else:
         low = text.lower()
         status = "APPLIED" if ("thank you for applying" in low or "application submitted" in low) else "UNKNOWN"
