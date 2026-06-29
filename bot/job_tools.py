@@ -87,6 +87,48 @@ def build_job_tools(bot):
                    "Call apply_jobs to apply to these on the candidate's behalf.")
 
     @tool(
+        "fetch_company_board",
+        "Pull a SPECIFIC company's CURRENT open Bay-Area roles from its live Greenhouse/Lever/"
+        "Ashby board and return the application URLs — for ANY company, not just the built-in list. "
+        "Use this after you discover a company via WebSearch (pass its name or ATS slug). Chain it "
+        "across many companies to source widely. Returns only roles not already applied to.",
+        {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string", "description": "company name or ATS slug, e.g. 'Modern Treasury' or 'modern-treasury'"},
+                "query": {"type": "string", "description": "optional role focus; blank = the candidate's default lanes"},
+            },
+            "required": ["company"],
+        },
+    )
+    async def fetch_company_board(args):
+        company = (args.get("company") or "").strip()
+        if not company:
+            return _err("company is required")
+        from bot import job_boards
+        try:
+            urls = await asyncio.to_thread(job_boards.probe_company, company, args.get("query") or "")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("fetch_company_board failed")
+            return _err(f"lookup failed: {type(exc).__name__}")
+        db = bot.db
+        fresh = []
+        for u in urls:
+            try:
+                if db and await db.is_already_applied(u):
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+            fresh.append(u)
+        bot.last_found = list(dict.fromkeys((getattr(bot, "last_found", []) or []) + fresh))
+        if not fresh:
+            return _ok(f"No open Bay-Area matches found on {company}'s board (no board resolved, "
+                       "nothing open in the candidate's lanes, or already applied). Try another company.")
+        listing = "\n".join(f"- {u}" for u in fresh)
+        return _ok(f"{len(fresh)} open Bay-Area role(s) at {company}:\n{listing}\n\n"
+                   "These are added to your found set — call apply_jobs to apply.")
+
+    @tool(
         "apply_jobs",
         "Apply to jobs on the candidate's behalf, IN THE BACKGROUND. Each result is posted "
         "to this channel as it completes (✅ applied / ⛔ skipped / ❌ failed). Pass `urls` to "
@@ -200,7 +242,7 @@ def build_job_tools(bot):
             return _err(f"could not save the email: {type(exc).__name__}")
         return _ok(summary)
 
-    handlers = [find_jobs, apply_jobs, application_status, set_email]
+    handlers = [find_jobs, fetch_company_board, apply_jobs, application_status, set_email]
     server = create_sdk_mcp_server(name="jobs", version="1.0.0", tools=handlers)
     names = [f"mcp__jobs__{h.name}" for h in handlers]
     return server, names
