@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import urllib.request
 
 from bot.bay_area import is_bay_area
