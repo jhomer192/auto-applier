@@ -49,8 +49,7 @@ RESULT_URLS: ["https://...", "https://..."]
 If you find none, output exactly: RESULT_URLS: []"""
 
 
-async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
-                    attempts: int = 2) -> list[str]:
+async def find_jobs(query: str = "", max_results: int = 25, attempts: int = 2) -> list[str]:
     """Return Bay Area application URLs.
 
     PRIMARY source is the live ATS board APIs (bot.job_boards) — current, OPEN roles
@@ -60,7 +59,7 @@ async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
     from bot import job_boards
     board: list[str] = []
     try:
-        board = await job_boards.find_board_jobs(max_results)
+        board = await job_boards.find_board_jobs(max_results, query)
     except Exception:  # noqa: BLE001
         logger.exception("job_finder: live board lookup failed")
     if len(board) >= max_results:
@@ -75,7 +74,7 @@ async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
     prompt = _FINDER_PROMPT.format(query_line=query_line, n=max_results)
     agent: list[str] = []
     for attempt in range(1, attempts + 1):
-        agent = await _search_once(prompt, query, max_results, timeout)
+        agent = await _search_once(prompt, query, max_results)
         if agent:
             break
         if attempt < attempts:
@@ -87,7 +86,7 @@ async def find_jobs(query: str = "", max_results: int = 25, timeout: int = 600,
     return merged[:max_results]
 
 
-async def _search_once(prompt: str, query: str, max_results: int, timeout: int) -> list[str]:
+async def _search_once(prompt: str, query: str, max_results: int) -> list[str]:
     env = dict(os.environ)
     env["HOME"] = "/home/claude"
     env["IS_SANDBOX"] = "1"
@@ -102,23 +101,15 @@ async def _search_once(prompt: str, query: str, max_results: int, timeout: int) 
         "--mcp-config", os.path.join(MCP_DIR, ".mcp.json"), "--strict-mcp-config",
         prompt,
     ]
-    logger.info("job_finder: launching search (query=%r, max=%d, timeout=%ds)",
-                query or "<profile desired_roles>", max_results, timeout)
+    logger.info("job_finder: launching search (query=%r, max=%d)",
+                query or "<profile desired_roles>", max_results)
     t0 = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=MCP_DIR, env=env,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        logger.warning("job_finder: search TIMED OUT after %ds — killed", timeout)
-        return []
+    out, _ = await proc.communicate()
 
     elapsed = int(time.monotonic() - t0)
     text = out.decode("utf-8", errors="replace") if out else ""

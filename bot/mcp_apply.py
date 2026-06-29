@@ -83,9 +83,9 @@ RESULT: BLOCKED <short reason>
 RESULT: FAILED <short reason>"""
 
 
-async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
+async def apply_via_mcp(url: str) -> dict:
     """Drive a full application via claude -p + Playwright MCP. Returns
-    {success, result, detail, raw}."""
+    {success, result, detail, raw}. No time cap — an apply runs to completion."""
     env = dict(os.environ)
     env["HOME"] = "/home/claude"          # workspace for the claude user
     env["IS_SANDBOX"] = "1"               # allow --dangerously-skip-permissions as root
@@ -106,15 +106,7 @@ async def apply_via_mcp(url: str, timeout: int = 900) -> dict:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        logger.warning("apply_via_mcp: TIMED OUT after %ds for %s", timeout, url)
-        return {"success": False, "result": "TIMEOUT", "detail": "", "raw": ""}
+    out, _ = await proc.communicate()
 
     elapsed = int(time.monotonic() - t0)
     text = (out or b"").decode("utf-8", "replace")

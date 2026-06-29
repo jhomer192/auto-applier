@@ -38,7 +38,6 @@ logger = logging.getLogger("auto-applier-discord")
 WORKING = "⏳ working…"
 LONG_OUTPUT_CHARS = 6000
 INIT_RETRIES = 2     # transient "Control request timeout: initialize" → rebuild + retry
-QUERY_TIMEOUT = 300  # hard cap on a single Claude turn so a wedged CLI can't lock the channel
 
 _SYSTEM_PROMPT = """You are the job-application assistant in Jack's private Discord, working on
 behalf of ONE candidate — the person described in profile.yaml (read it when you need their
@@ -240,20 +239,17 @@ class ApplierAgent(discord.Client):
                 pass
 
     async def _ask_claude(self, prompt: str) -> str:
-        # Serialize queries (the SDK session holds the running conversation). Each
-        # attempt is bounded by QUERY_TIMEOUT so a hung claude CLI (never emits a
-        # ResultMessage) can't hold the lock — and thus the whole channel — forever.
-        # We only retry when the attempt failed BEFORE Claude produced anything, so a
-        # mid-stream failure never replays a side-effecting prompt (apply/set_email)
-        # onto a fresh, context-less session.
+        # Serialize queries (the SDK session holds the running conversation). NO time
+        # cap — the bot takes as long as the work needs (a big sourcing/apply run can
+        # run for a long time). We only retry when an attempt failed BEFORE Claude
+        # produced anything, so a mid-stream failure never replays a side-effecting
+        # prompt (apply/set_email) onto a fresh, context-less session.
         async with self._lock:
             last_exc: Exception | None = None
             for attempt in range(1, INIT_RETRIES + 1):
                 produced = False
-                client = await self._ensure_session()
-
-                async def _run() -> str:
-                    nonlocal produced
+                try:
+                    client = await self._ensure_session()
                     await client.query(prompt)
                     parts: list[str] = []
                     async for msg in client.receive_response():
@@ -263,10 +259,7 @@ class ApplierAgent(discord.Client):
                                 if isinstance(block, TextBlock):
                                     parts.append(block.text)
                     return "".join(parts).strip()
-
-                try:
-                    return await asyncio.wait_for(_run(), timeout=QUERY_TIMEOUT)
-                except Exception as exc:  # noqa: BLE001 (incl. TimeoutError)
+                except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     logger.warning("claude query attempt %d/%d failed: %s",
                                    attempt, INIT_RETRIES, type(exc).__name__)
