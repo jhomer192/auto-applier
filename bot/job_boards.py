@@ -35,19 +35,46 @@ LEVER = [
     "saviynt", "hive", "thinkahead", "attentive", "ironcladhq", "plaid", "gusto",
 ]
 
-# Role keywords matching the candidate (cybersecurity grad, open to BDR/white-collar).
+# Role keywords. The goal is to land the candidate ANY entry-level Bay-Area job —
+# his background is cybersecurity, but he's open to sales/BDR, ops, support, and
+# general white-collar work. So this spans cyber + the common entry-level lanes a
+# recent grad gets hired into. The senior-title exclusion below keeps it junior.
 ROLE_KEYWORDS = [
+    # cybersecurity / IT (his background)
     "security", "soc", "cyber", "grc", "risk", "analyst", "information security",
-    "infosec", "threat", "incident", "compliance",
-    "sales development", "business development", "bdr", "sdr",
+    "infosec", "threat", "incident", "compliance", "it support", "help desk",
+    "service desk", "desktop support", "technical support",
+    # sales / business development
+    "sales development", "business development", "bdr", "sdr", "sales representative",
+    "account representative", "inside sales",
+    # customer / client facing
+    "customer success", "customer support", "customer experience", "client services",
+    "support specialist", "onboarding", "implementation",
+    # operations / general entry-level white-collar
+    "operations associate", "operations coordinator", "business operations",
+    "associate", "coordinator", "specialist", "data analyst", "business analyst",
+    "recruiting coordinator", "people operations", "administrative",
 ]
+
+# Titles to skip (substring match): too senior for an early-career candidate, or
+# specialist software-engineering roles he isn't a fit for (Jack: "he won't get a
+# SWE job"). Security *analyst* roles still pass; security *engineer* coding roles
+# are dropped along with general SWE.
+_EXCLUDE = (
+    # seniority
+    "senior", "staff", "principal", "director", "vp ", "vice president", "head of",
+    "manager", "lead ", "architect", "executive", " ii", " iii", " iv",
+    # software-engineering ICs he can't fill
+    "software engineer", "software developer", "developer", "data scientist",
+    "machine learning", "devops", "backend", "front end", "frontend", "full stack",
+    "full-stack", "mobile engineer", "platform engineer", "firmware",
+)
 
 
 def _matches_role(title: str) -> bool:
     t = title.lower()
     if any(k in t for k in ROLE_KEYWORDS):
-        # exclude clearly senior/leadership titles — Zach is early-career
-        if any(b in t for b in ("staff", "principal", "director", "vp ", "head of", "manager", "lead ", "senior staff")):
+        if any(b in t for b in _EXCLUDE):
             return False
         return True
     return False
