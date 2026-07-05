@@ -102,7 +102,8 @@ const EMPTY_MCP = join(ROOT, '.mcp.empty.json')
 
 function brainBusy() {
   try {
-    execSync('pgrep -f "claude -p"', { stdio: 'pipe' })
+    // [-] keeps the pattern from matching its own shell wrapper's cmdline
+    execSync('pgrep -f "claude [-]p"', { stdio: 'pipe' })
     return true
   } catch { return false }
 }
