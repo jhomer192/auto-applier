@@ -1,0 +1,12 @@
+[Unit]
+Description=3am VPS janitor (deterministic cleanup)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Plain bash checklist, no claude run — a generous finite timeout is fine here.
+TimeoutStartSec=30min
+ExecStart=/opt/auto-applier/scripts/janitor.sh
+StandardOutput=journal
+StandardError=journal
