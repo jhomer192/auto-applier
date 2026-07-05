@@ -1,0 +1,18 @@
+[Unit]
+Description=Auto-applier nightly inbox sweep
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# oneshot runtime is governed by TimeoutStartSec; the default (90s) would kill
+# the sweep mid-run. Never cap a claude run.
+TimeoutStartSec=infinity
+User=claude
+WorkingDirectory=/opt/auto-applier
+ExecStart=/usr/bin/node /opt/auto-applier/scripts/nightly_sweep.mjs
+EnvironmentFile=/opt/auto-applier/.env
+Environment=HOME=/home/claude
+Environment=ANTHROPIC_API_KEY=
+StandardOutput=journal
+StandardError=journal

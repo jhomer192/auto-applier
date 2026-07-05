@@ -7,7 +7,10 @@
 //   node scripts/check_email.cjs --code             # extract 4-8 char verification codes
 //   node scripts/check_email.cjs --since 10m        # only emails from last 10 minutes
 //
+//   node scripts/check_email.cjs --account 2         # second inbox (IMAP2_* vars — Jack's)
+//
 // Reads IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASS from ../.env
+// (--account 2 reads IMAP2_HOST, IMAP2_PORT, IMAP2_USER, IMAP2_PASS instead)
 
 const { ImapFlow } = require('imapflow');
 const fs = require('fs');
@@ -19,7 +22,7 @@ function loadEnv() {
   const envPath = path.join(ROOT, '.env');
   if (!fs.existsSync(envPath)) return;
   for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
-    const m = line.match(/^([A-Z_]+)=(.+)$/);
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.+)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   }
 }
@@ -34,17 +37,19 @@ function parseSince(s) {
 
 async function main() {
   loadEnv();
-  const host = process.env.IMAP_HOST;
-  const port = parseInt(process.env.IMAP_PORT || '993');
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASS;
+  const args = process.argv.slice(2);
+  const account = args.includes('--account') ? args[args.indexOf('--account') + 1] : '1';
+  const P = account === '2' || account === 'jack' ? 'IMAP2_' : 'IMAP_';
+
+  const host = process.env[P + 'HOST'];
+  const port = parseInt(process.env[P + 'PORT'] || '993');
+  const user = process.env[P + 'USER'];
+  const pass = process.env[P + 'PASS'];
 
   if (!host || !user || !pass) {
-    console.error('ERROR: set IMAP_HOST, IMAP_USER, IMAP_PASS in .env');
+    console.error(`ERROR: set ${P}HOST, ${P}USER, ${P}PASS in .env`);
     process.exit(1);
   }
-
-  const args = process.argv.slice(2);
   const fromFilter = args.includes('--from') ? args[args.indexOf('--from') + 1] : null;
   const subjectFilter = args.includes('--subject') ? args[args.indexOf('--subject') + 1] : null;
   const extractCode = args.includes('--code');

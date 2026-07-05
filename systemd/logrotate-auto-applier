@@ -1,0 +1,9 @@
+# Install as /etc/logrotate.d/auto-applier
+/opt/auto-applier/logs/*.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

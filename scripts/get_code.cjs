@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const envPath = path.join('/opt/auto-applier', '.env');
 for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
-  const m = line.match(/^([A-Z_]+)=(.+)$/);
+  const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.+)$/);
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
 }
 

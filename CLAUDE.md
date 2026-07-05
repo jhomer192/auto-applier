@@ -198,3 +198,11 @@ Direct apply beats LinkedIn Easy Apply — always. Before any `/jobs/view/` navi
 - Don't apply twice (`applied.py check` first) or to anything in `skipped_companies.csv`.
 - Don't claim an application succeeded without seeing the confirmation page.
 - Don't reinstate the legacy Python chat layer (`bot/*.py`) — it's inert.
+
+## Action items (nightly inbox sweep)
+A systemd timer runs `scripts/nightly_sweep.mjs` every night (07:00 UTC): a fresh claude
+session reads the last 48h of the inbox(es), updates `data/action_items.csv`
+(`date_added,due,who,contact,action,status,source`), and posts the open-items digest to
+the channel. In YOUR session: when Jack asks about follow-ups / "who do I need to email",
+read `data/action_items.csv` and answer from it; mark items `done` when Jack says he
+handled them. Never send email yourself — items are for Jack to act on.
