@@ -1,0 +1,14 @@
+{
+  "name": "auto-applier",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "bot": "node bot.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "imapflow": "^1.4.2",
+    "nodemailer": "^9.0.3",
+    "playwright": "^1.49.0"
+  }
+}

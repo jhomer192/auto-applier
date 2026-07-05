@@ -1,0 +1,20 @@
+[Unit]
+Description=Auto Job Applier (Discord, brain model)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/auto-applier
+ExecStart=/usr/bin/node /opt/auto-applier/discord_bot.mjs
+EnvironmentFile=/opt/auto-applier/.env
+Environment=HOME=/home/claude
+Environment=IS_SANDBOX=1
+Environment=ANTHROPIC_API_KEY=
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

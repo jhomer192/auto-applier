@@ -101,16 +101,27 @@ async function main() {
         console.log(`DATE: ${date}`);
 
         if (extractCode) {
-          const textBody = body
+          // Decode any base64 MIME parts (Greenhouse emails use base64 encoding)
+          const b64Pattern = /Content-Transfer-Encoding:\s*base64\s*\r?\n\s*\r?\n([\s\S]*?)(?=\r?\n--|\r?\nContent-|$)/gi;
+          let b64Match;
+          let b64Decoded = '';
+          while ((b64Match = b64Pattern.exec(body)) !== null) {
+            try {
+              const d = Buffer.from(b64Match[1].replace(/\s/g, ''), 'base64').toString('utf8');
+              b64Decoded += ' ' + d;
+              if (extractCode) process.stderr.write('B64_DECODED: ' + d.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,500) + '\n');
+            } catch(e) {}
+          }
+          const textBody = (body + ' ' + b64Decoded)
             .replace(/=\r?\n/g, '')
             .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
           const codePatterns = [
-            /(?:code|pin|verification|security)\s*(?:is|:)\s*[*\s]*([A-Z0-9]{4,8})\b/i,
-            /\b([A-Z0-9]{6,8})\b(?=\s*(?:to verify|is your|as your|security))/i,
-            /(?:enter|use|submit|type)\s+(?:the\s+)?(?:code\s+)?[*\s]*([A-Z0-9]{4,8})\b/i,
-            />\s*([A-Z0-9]{6,8})\s*</,
-            /\b([A-Z0-9]{8})\b/,
+            />\s*([A-Za-z0-9]{6,8})\s*<\/h[123]>/i,
+            /(?:code|pin|verification|security)\s*(?:is|:)\s*[*\s]*([A-Za-z0-9]{4,8})\b/i,
+            /\b([A-Za-z0-9]{6,8})\b(?=\s*(?:to verify|is your|as your|security))/i,
+            /(?:enter|use|submit|type)\s+(?:the\s+)?(?:code\s+)?[*\s]*([A-Za-z0-9]{4,8})\b/i,
+            />\s*([A-Za-z0-9]{6,8})\s*</,
           ];
 
           let code = null;

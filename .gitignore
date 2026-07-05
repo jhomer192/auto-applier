@@ -1,10 +1,18 @@
 .env
 data/
 .venv/
+node_modules/
 __pycache__/
 *.pyc
 *.db
-*.json
 !.env.example
+# Screenshots / page snapshots from live runs
+*.png
+*_snapshot.md
+.playwright-mcp/
+logs/
+package-lock.json
 # User's personal profile — contains PII (name, phone, email, work history)
 profile.yaml
+profile.*.yaml
+resume*.pdf

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/:*)",
+      "Bash(python3 scripts/:*)",
+      "Read(*)",
+      "mcp__playwright__*"
+    ],
+    "deny": [
+      "Bash(python3 -c:*)", "Bash(python -c:*)", "Bash(node -e:*)", "Bash(node --eval:*)",
+      "Bash(perl:*)", "Bash(ruby:*)", "Bash(php:*)", "Bash(bash -c:*)", "Bash(sh -c:*)", "Bash(eval:*)",
+      "Bash(curl:*)", "Bash(wget:*)", "Bash(nc:*)", "Bash(ncat:*)", "Bash(telnet:*)", "Bash(openssl:*)",
+      "Bash(sendmail:*)", "Bash(mail:*)", "Bash(mailx:*)", "Bash(ssh:*)", "Bash(scp:*)",
+      "Bash(env:*)", "Bash(printenv:*)", "Bash(cat:*)", "Bash(set:*)", "Bash(export:*)",
+      "Read(**/.env)", "Read(/root/**)", "Read(/etc/**)"
+    ]
+  },
+  "mcpServers": {
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] }
+  }
+}
