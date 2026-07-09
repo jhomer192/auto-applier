@@ -229,3 +229,27 @@ lanes (Security/SOC/GRC, BDR/SDR, Finance/Risk/Compliance) just to hit a number 
 the roles most likely to keyword-match his actual resume and survive ATS screening. Breadth
 across the other lanes is fine, but if a wave is running short on time, prioritize the
 resume-matching lanes over padding with the broader lanes.
+
+## Throughput — don't block on PIN-gate waits (learned 2026-07-09)
+The email-PIN wait (up to ~8 min polling `check_email.cjs --code` every ~20s) is currently a
+**blocking, single-tab wait** — real logs show multiple CoreWeave-style applications each
+hitting a verification-code gate back to back, burning minutes doing nothing per gate. Fix:
+**work another application in a second browser tab while waiting on a PIN.**
+
+- After submitting a form that shows a PIN/security-code gate, use
+  `mcp__playwright__browser_tabs` to open a NEW tab and start the next queued application
+  immediately instead of idling on the first tab.
+- Poll `check_email.cjs --code` between actions on the second tab (it's a cheap Bash call,
+  not a browser action) rather than as a tight blocking loop — check it every few actions
+  you take on the other application.
+- Once a `CODE:` appears, switch back to the gated tab (`browser_tabs` select), enter it,
+  confirm, record the application, close that tab, and continue.
+- You can have 2-3 tabs in flight this way (one per pending PIN gate) — don't exceed ~3,
+  Playwright/the VPS gets unreliable with too many concurrent contexts.
+- This is purely about not wasting idle time — it does not change the fit filter, the
+  dedup rules, or anything else about which jobs you apply to.
+
+Also: pre-source a deeper backlog before switching to apply-mode (e.g. gather 20-30 deduped
+fresh URLs across Greenhouse/Workable/live company boards) rather than interleaving one
+search → one apply → one search. Fewer context switches between sourcing and applying
+means more of each wave's time goes to actual applications.
