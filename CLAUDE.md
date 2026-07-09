@@ -265,3 +265,45 @@ Also: pre-source a deeper backlog before switching to apply-mode (e.g. gather 20
 fresh URLs across Greenhouse/Workable/live company boards) rather than interleaving one
 search → one apply → one search. Fewer context switches between sourcing and applying
 means more of each wave's time goes to actual applications.
+
+## Sourcing priority & tighter filter (2026-07-09) — READ THIS, it governs targeting
+Zachary has NO professional work experience yet (one 3-month content subcontract + certs +
+self-study). So conversion is a numbers game, but only if we aim at roles that actually hire
+zero-experience early-career candidates AND where his background is a signal, not noise.
+Spraying at roles that require experience (Data Analyst, Exec Assistant to a CTO, mid-level
+"Business Partner") burns applications for ~0 return.
+
+**PRIORITY LANES — source and apply to these FIRST, in this order:**
+1. **GRC / Compliance / Risk / Security Analyst / SOC Tier-1** — his BEST fit. The M.S. in
+   Cyber Risk Management + Security+ + ISC2 CC are directly relevant here; this is the one
+   lane where his resume is genuinely strong. Weight heavily.
+2. **Entry SDR / BDR / Sales Development — PREFER cybersecurity/security-software companies**
+   (e.g. Verkada, VulnCheck, Zscaler, Wiz, CrowdStrike-type). SDR is the classic "no
+   experience, we train you" entry door, and at a security company his cyber background flips
+   from mismatch to asset ("understands the buyer"). Generic non-security SDR is still fine,
+   just second-preference to security-company SDR.
+3. **IT Support / Help Desk / Desktop Support / Technical Support** — his certs directly help.
+4. **Recruiting Coordinator / People Operations Coordinator / Talent Coordinator** — entry,
+   organization-focused, hires early-career.
+
+**BIAS toward postings explicitly labeled** "New Grad," "Early Career," "Entry Level,"
+"Associate," "Trainee," "Rotational," or a roman-numeral/level "I" — these are calibrated for
+zero experience and are his highest-conversion targets.
+
+**HARD FILTER — drop these instantly (STRENGTHENED — earlier waves wrongly applied to some):**
+- ANY Software Engineer / Developer / SWE-adjacent role, INCLUDING "Forward Deployed Engineer,"
+  "Solutions Engineer," "Sales Engineer" — needs a coding/technical interview he can't pass.
+  (A prior wave wrongly applied to an xAI Forward Deployed Engineer — never again.)
+- ANY role with "Business Partner," "Partner," "Manager," "Lead," "Principal," "Staff,"
+  "Senior," or a level "II"/"III"/"Sr" — these are mid/senior and imply real experience.
+  ("People Business Partner" / "HRBP" is a mid-senior HR role, NOT entry — drop it.)
+- **Executive Assistant / EA to a named executive** (EA to CTO/CEO/VP) — wants prior EA
+  experience. A generic entry "Administrative Coordinator/Assistant" is still OK.
+- **Data Analyst / Business Analyst / Data Scientist** UNLESS the posting explicitly says
+  "entry-level / no experience / new grad" — most want a demonstrated analytics track record
+  he doesn't have yet. When in doubt, skip.
+- De-prioritize (don't ban) generic non-lane roles (copywriter, marketing, comms) — apply to
+  those only when the priority lanes are exhausted for the wave.
+
+This does NOT change the Bay-Area-only rule, the dedup rules, or the apply mechanics — it only
+sharpens WHICH jobs are worth an application. Quality of targeting over raw count.
