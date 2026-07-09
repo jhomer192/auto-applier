@@ -57,8 +57,9 @@ For Greenhouse / Lever / Ashby / Workable direct-apply forms:
    its visible text — don't assume option ids. Visa sponsorship → No. "Worked here before?"
    → No. "How did you hear about us?" → LinkedIn (or Company Website). Demographics/EEO →
    "Decline to self-identify". **Never lie on any field.**
-5. **Resume**: upload `data/resume.pdf` to the Resume/CV field
-   (`mcp__playwright__browser_file_upload`). Ship it as-is — don't tailor per job.
+5. **Resume**: pick the file by lane (see "Resume — pick by lane" below), upload it
+   to the Resume/CV field (`mcp__playwright__browser_file_upload`). Ship it as-is once
+   chosen — do not tailor wording per individual job, only pick the right lane variant.
 6. **Submit**, then handle any PIN gate (see Email above).
 7. **Verify success** — look for "thank you" / "application submitted" / a confirmation
    page. Only then record it.
@@ -144,7 +145,7 @@ python3 scripts/seen.py mark "$URL" "$COMPANY" "$TITLE"
 | `data/skipped_companies.csv` | `scripts/skipped.py {check\|add\|list}` |
 | `data/seen.csv` | `scripts/seen.py {check\|mark\|count}` |
 | `data/linkedin_auth.json` | Playwright storageState (may be missing) |
-| `data/resume.pdf` | uploaded to every application |
+| `data/resume.pdf`, `data/resume_security.pdf`, `data/resume_sdr.pdf`, `data/resume_ops.pdf` | lane-specific resumes — see "Resume — pick by lane" |
 | `profile.yaml` | resume + prefs — direct Read OK (small) |
 
 Helpers normalize URLs across host migrations and do canonical company matching. Trust them.
@@ -167,7 +168,18 @@ onsite/hybrid role is good — but an onsite/hybrid role in ANY other metro (NY,
 Atlanta, Denver, Nashville, Seattle, Austin, SLC, DC, Boston, LA, …) must be DROPPED,
 even if the title is a perfect lane match. No exceptions.
 **Excluded companies:** none. (Zach has no company exclusions.) No sponsorship required.
-**Resume:** ship `data/resume.pdf` as-is — do not tailor per job.
+**Resume — pick by lane (2026-07-09):** four resume files exist, all built from the
+same true facts, reframed per lane by an adversarial review process — none contain
+anything not in Zachary's actual background.
+- `data/resume_security.pdf` — Security/SOC/GRC/Cyber Risk/Compliance/IT Support roles
+- `data/resume_sdr.pdf` — BDR/SDR/Sales Development/Account Development roles
+- `data/resume_ops.pdf` — HR/People Ops, Admin/EA/Office, Customer Success/Support,
+  Data/Business Analyst, Content/Comms/Marketing roles
+- `data/resume.pdf` — legacy default, identical in spirit to resume_security.pdf; use
+  resume_security.pdf instead when in doubt.
+Pick by the job's actual lane, not by convenience — a Security lane resume on an SDR
+application undersells the candidate's fit and vice versa. Ship the chosen file as-is,
+same as before — no per-job wording edits.
 
 ## Batch behavior (important)
 - **You ARE the apply engine — there is no `apply_jobs` or `application_status` tool.** You
