@@ -346,8 +346,30 @@ function runClaude(prompt, channelId, onActivity, onMilestone) {
   })
 }
 
+// ── Self-echo guard ───────────────────────────────────────────────────────────
+// Peer bots (e.g. classistant) can relay our own status replies back into the
+// channel — without this, that relay gets re-queued as a "new instruction" and
+// undoes a /stop by re-launching a fresh claude -p turn (seen live 2026-07-09:
+// our own "Nothing is running." reply came back via classistant and restarted
+// the applier seconds after Jack stopped it). Track recent outgoing text and
+// drop any peer message that's just an echo of something we said ourselves.
+const recentOwnTexts = []
+function trackOwnText(t) {
+  if (!t) return
+  const trimmed = t.trim()
+  if (!trimmed) return
+  recentOwnTexts.push({ text: trimmed, at: Date.now() })
+  while (recentOwnTexts.length > 20) recentOwnTexts.shift()
+}
+function isSelfEcho(content) {
+  const now = Date.now()
+  const trimmed = content.trim()
+  return recentOwnTexts.some(e => e.text === trimmed && now - e.at < 5 * 60_000)
+}
+
 // ── Discord message chunking (2000 char limit) ──────────────────────────────
 async function sendChunked(channel, text, replyToMsg = null) {
+  trackOwnText(text)
   const chunks = []
   for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
   for (let i = 0; i < chunks.length; i++) {
@@ -405,7 +427,7 @@ async function handleMessage(item) {
     }
   }
 
-  const onMilestone = (t) => { channel.send(t.slice(0, 1900)).catch(() => {}) }
+  const onMilestone = (t) => { trackOwnText(t.slice(0, 1900)); channel.send(t.slice(0, 1900)).catch(() => {}) }
 
   const { text, sessionId, limitedAt } = await runClaude(item.content, item.channelId, onActivity, onMilestone)
   const secs = Math.round((Date.now() - t0) / 1000)
@@ -421,8 +443,10 @@ async function handleMessage(item) {
 
   if (workingMsg) {
     const first = fullReply.slice(0, 1900)
+    trackOwnText(first)
     await workingMsg.edit(first).catch(() => null)
     for (let i = 1900; i < fullReply.length; i += 1900) {
+      trackOwnText(fullReply.slice(i, i + 1900))
       await channel.send(fullReply.slice(i, i + 1900)).catch(() => null)
     }
   } else {
@@ -462,9 +486,9 @@ async function handleCommand(msg, cmd) {
     if (dropped) bits.push(`dropped ${dropped} queued`)
     if (unpaused) bits.push('cleared the usage-limit pause')
     const extra = bits.length ? ` (${bits.join(', ')})` : ''
-    await msg.channel.send(
-      stopped ? `🛑 Stopping the current turn…${extra}` : `Nothing is running${extra ? extra : '.'}`
-    ).catch(() => {})
+    const replyText = stopped ? `🛑 Stopping the current turn…${extra}` : `Nothing is running${extra ? extra : '.'}`
+    trackOwnText(replyText)
+    await msg.channel.send(replyText).catch(() => {})
     logLine(`STOP by ${msg.author.username}: stopped=${stopped} dropped=${dropped} unpaused=${unpaused}`)
     return true
   }
@@ -473,13 +497,14 @@ async function handleCommand(msg, cmd) {
     const sess = sessions[msg.channelId]
     const paused = Date.now() < pausedUntil
     const state = paused ? `⏸ paused (usage limit) — resumes ${fmtWhen(pausedUntil)}` : running ? '🟢 running' : '⚪️ idle'
-    await msg.channel.send(
-      `${state} · queued: ${queue.filter(m => m.channelId === msg.channelId).length}` +
+    const statusText = `${state} · queued: ${queue.filter(m => m.channelId === msg.channelId).length}` +
       (sess ? ` · session \`${sess.slice(0, 8)}…\`` : '')
-    ).catch(() => {})
+    trackOwnText(statusText)
+    await msg.channel.send(statusText).catch(() => {})
     return true
   }
   if (cmd === '/help') {
+    trackOwnText(HELP)
     await msg.channel.send(HELP).catch(() => {})
     return true
   }
@@ -540,6 +565,13 @@ client.on('messageCreate', async (msg) => {
   if (!content) return
   if (isPeer) logLine(`PEER ${msg.author.username}: ${content.slice(0, 120)}`)
 
+  // A peer bot relaying our own status text back at us is not a new instruction —
+  // queuing it would re-launch a turn right after e.g. a /stop (see recentOwnTexts).
+  if (isPeer && isSelfEcho(content)) {
+    logLine(`SELF_ECHO_IGNORED ${msg.author.username}: ${content.slice(0, 120)}`)
+    return
+  }
+
   // Slash commands run immediately, even mid-turn — this is how /stop cancels.
   // Humans only: a peer bot must not be able to /stop a run.
   const cmd = content.toLowerCase()
@@ -549,7 +581,9 @@ client.on('messageCreate', async (msg) => {
 
   queue.push({ channelId: msg.channelId, content, msg })
   if (Date.now() < pausedUntil) {
-    msg.reply(`⏸ queued (#${queue.length}) — paused for the Claude usage limit, auto-resumes ${fmtWhen(pausedUntil)}.`).catch(() => {})
+    const queuedText = `⏸ queued (#${queue.length}) — paused for the Claude usage limit, auto-resumes ${fmtWhen(pausedUntil)}.`
+    trackOwnText(queuedText)
+    msg.reply(queuedText).catch(() => {})
   } else if (busy || active.size > 0) {
     msg.react('⏳').catch(() => {})
   }

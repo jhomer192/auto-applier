@@ -206,3 +206,26 @@ session reads the last 48h of the inbox(es), updates `data/action_items.csv`
 the channel. In YOUR session: when Jack asks about follow-ups / "who do I need to email",
 read `data/action_items.csv` and answer from it; mark items `done` when Jack says he
 handled them. Never send email yourself — items are for Jack to act on.
+
+## Platform reliability — learned 2026-07-09
+Ashby and Lever have repeatedly hCaptcha/Cloudflare-blocked this VPS's IP across many
+companies (Hive — lost an entire 11-job batch, Anchorage, BIS, Airwallex, Pulse, Tavrn.ai,
+Vanta, Baseten; GGRC's Workable form hit Cloudflare Turnstile once too). These blocks have
+produced zero successful submissions despite repeated attempts. **Deprioritize Ashby/Lever:**
+try Greenhouse, Workable, SmartRecruiters, and direct company-board browsing FIRST each wave.
+If an Ashby/Lever hCaptcha appears, take the one allowed attempt (per the existing
+Blocked-page rule), mark seen, and don't burn a second attempt on that platform this wave —
+it will not clear.
+
+Web/Google search results for job postings are frequently stale — a large share of turns are
+lost to already dead/expired links. When you already know good target companies, prefer
+browsing their live ATS board directly (job-boards.greenhouse.io/<company>,
+jobs.ashbyhq.com/<company>) over web search — it only returns currently-open roles.
+
+**Reality check (2026-07-09):** 321 applications out, zero recruiter replies or interview
+requests yet — only auto-confirmations/PIN emails in the inbox. Normal for <2 weeks
+post-apply, but don't inflate the applied count with roles far outside Zachary's strongest
+lanes (Security/SOC/GRC, BDR/SDR, Finance/Risk/Compliance) just to hit a number — those are
+the roles most likely to keyword-match his actual resume and survive ATS screening. Breadth
+across the other lanes is fine, but if a wave is running short on time, prioritize the
+resume-matching lanes over padding with the broader lanes.
