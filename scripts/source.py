@@ -70,6 +70,11 @@ ROTATION_PATH = ROOT / "data" / "board_rotation.csv"
 APPLIED_PATH = ROOT / "data" / "applied.csv"
 SEEN_PATH = ROOT / "data" / "seen.csv"
 RETRY_PATH = ROOT / "data" / "retry.csv"  # already queued for another attempt — don't re-surface
+BLOCKLIST_PATH = ROOT / "data" / "blocklist.txt"  # "<ats_host>\t<company>\t<reason>"
+# Tier 1 per CLAUDE.md SITE ROUTING — the only platforms that actually convert. Ashby
+# blocks at submit regardless of IP (Tier 3 HARD-AVOID), so it is OFF by default: sourcing
+# Ashby jobs just fills a wave with applications that can never land.
+DEFAULT_PLATFORMS = ("greenhouse", "lever")
 ROTATION_HEADER = ["platform", "token", "last_mined", "hits", "fails"]
 DEAD_AFTER = 4  # consecutive fetch failures before a board is dropped from rotation
 
@@ -250,6 +255,19 @@ def location_ok(location: str, title: str) -> bool:
     return False
 
 
+def load_blocked_companies() -> set[str]:
+    """Companies that blocked us on a specific ATS (data/blocklist.txt). Skipped at
+    source time so a wave never re-opens a wall we already hit."""
+    blocked: set[str] = set()
+    if not BLOCKLIST_PATH.exists():
+        return blocked
+    for line in BLOCKLIST_PATH.read_text().splitlines():
+        parts = [p.strip().lower() for p in line.split("\t") if p.strip()]
+        if len(parts) >= 2:
+            blocked.add(parts[1])
+    return blocked
+
+
 def load_known_urls() -> set[str]:
     known: set[str] = set()
     for path in (APPLIED_PATH, SEEN_PATH, RETRY_PATH):
@@ -304,6 +322,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--n", type=int, default=30, help="max jobs to print (default 30)")
     ap.add_argument("--boards", type=int, default=45, help="boards to mine this run (default 45)")
     ap.add_argument("--lane", choices=sorted(LANES), help="restrict to one lane")
+    ap.add_argument("--platforms", default=",".join(DEFAULT_PLATFORMS),
+                    help="comma-separated: greenhouse,lever[,ashby] — Ashby is Tier 3 "
+                         "HARD-AVOID and off by default; pass it only when desperate")
     ap.add_argument("--per-company", type=int, default=3,
                     help="max jobs from any one company (default 3)")
     ap.add_argument("--include-seen", action="store_true", help="don't dedup against seen/applied")
@@ -311,7 +332,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--stats", action="store_true", help="print rotation state and exit")
     args = ap.parse_args(argv[1:])
 
-    pool, state = load_pool(), load_rotation()
+    wanted = {p.strip().lower() for p in args.platforms.split(",") if p.strip()}
+    pool = [b for b in load_pool() if b[0] in wanted]
+    state = load_rotation()
+    if not pool:
+        print(f"no boards for platforms={sorted(wanted)}", file=sys.stderr)
+        return 1
 
     if args.stats:
         live = [b for b in pool if state.get(b, {}).get("fails", 0) < DEAD_AFTER]
@@ -333,6 +359,7 @@ def main(argv: list[str]) -> int:
         results = list(ex.map(fetch, boards))
 
     known = set() if args.include_seen else load_known_urls()
+    blocked = load_blocked_companies()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows, ok_boards, dead_boards = [], 0, 0
 
@@ -345,6 +372,8 @@ def main(argv: list[str]) -> int:
         entry["fails"] = 0
         entry["last_mined"] = now
         ok_boards += 1
+        if board[1].lower() in blocked:
+            continue
         for p in postings:
             url, title = p["url"], p["title"]
             if not url or _norm(url) in known:

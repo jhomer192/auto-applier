@@ -101,7 +101,7 @@ to a different, cleaner job instead.
 Waves were running dry because every session sourced the same way — web search plus the
 same ~30 famous boards — so it kept re-finding jobs already in `applied.csv` / `seen.csv`
 and spun in a circle. `scripts/source.py` fixes that: it queries **live** ATS board APIs
-across a 236-board pool and **rotates** which boards it hits, weighted by how long since
+across a 291-board pool (185 Tier-1 Greenhouse/Lever) and **rotates** which boards it hits, weighted by how long since
 each was last mined, with real randomness on top — so consecutive sessions land on
 different companies. Verified: three back-to-back runs returned 66 jobs across 41
 companies with **zero** overlap.
@@ -115,6 +115,11 @@ python3 scripts/source.py --stats                # which boards are stalest, wha
 
 Output is TSV: `url  company  title  location  lane`. Everything it prints is already
 
+- **Tier-1 only** — Greenhouse + Lever, the platforms that actually convert. Ashby is in
+  the pool but OFF by default (Tier 3 HARD-AVOID, see SITE ROUTING); sourcing it just
+  fills a wave with submits that can never land. `--platforms greenhouse,lever,ashby`
+  overrides, only when a role has no Tier-1 posting anywhere,
+- company-skipped against `data/blocklist.txt` — walls you already hit aren't re-opened,
 - deduped against `applied.csv` + `seen.csv` + `retry.csv` (normalized URLs) — so it never
   duplicates the retry queue you drain at step 0,
 - location-filtered — Bay Area **or** fully-remote-US (Jack, 2026-07-19); other metros

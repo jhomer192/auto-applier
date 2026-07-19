@@ -12,9 +12,18 @@
 # Every token below was verified live on 2026-07-19 (365 guessed -> 236 that answer).
 # If a company is missing, its board may live on a different platform than you expect:
 # try the same token on all three before assuming the company isn't reachable.
+#
+# TIER MATTERS: Greenhouse + Lever are Tier 1 (they convert). Ashby is Tier 3 HARD-AVOID
+# per CLAUDE.md SITE ROUTING — it blocks at submit regardless of IP — so source.py only
+# mines greenhouse+lever unless you pass --platforms explicitly. Ashby tokens are kept
+# below for the rare case where a role has no Tier-1 posting anywhere.
 
-# --- greenhouse (108 boards) ----------------------------------------
+# --- greenhouse — TIER 1 (147 boards) -------------------------
+greenhouse:6sense
+greenhouse:adyen
 greenhouse:affirm
+greenhouse:airbnb
+greenhouse:airship
 greenhouse:airtable
 greenhouse:algolia
 greenhouse:alloy
@@ -24,22 +33,31 @@ greenhouse:asana
 greenhouse:astranis
 greenhouse:attentive
 greenhouse:betterment
+greenhouse:beyondtrust
 greenhouse:blend
+greenhouse:block
 greenhouse:branch
 greenhouse:braze
 greenhouse:brex
+greenhouse:calendly
 greenhouse:carta
 greenhouse:cerebral
 greenhouse:checkr
 greenhouse:chime
+greenhouse:circleci
+greenhouse:cleo
 greenhouse:clickhouse
 greenhouse:cloudflare
 greenhouse:coalition
 greenhouse:cockroachlabs
 greenhouse:coinbase
 greenhouse:comet
+greenhouse:corelight
 greenhouse:coursera
 greenhouse:cribl
+greenhouse:current
+greenhouse:customerio
+greenhouse:cybereason
 greenhouse:dagsterlabs
 greenhouse:databricks
 greenhouse:datadog
@@ -52,6 +70,7 @@ greenhouse:earnin
 greenhouse:elastic
 greenhouse:expel
 greenhouse:faire
+greenhouse:fastly
 greenhouse:figma
 greenhouse:fireblocks
 greenhouse:fivetran
@@ -62,46 +81,66 @@ greenhouse:gather
 greenhouse:gemini
 greenhouse:gitlab
 greenhouse:grafanalabs
+greenhouse:greenhouse
 greenhouse:guild
 greenhouse:gusto
+greenhouse:happymoney
 greenhouse:highnote
+greenhouse:honeycomb
 greenhouse:huntress
 greenhouse:imply
 greenhouse:instacart
+greenhouse:intercom
 greenhouse:invisible
 greenhouse:iterable
+greenhouse:jfrog
+greenhouse:justworks
 greenhouse:klaviyo
+greenhouse:knowbe4
 greenhouse:kodiak
 greenhouse:komodohealth
+greenhouse:labelbox
 greenhouse:lattice
 greenhouse:launchdarkly
 greenhouse:lithic
 greenhouse:lyft
 greenhouse:marqeta
+greenhouse:mcafee
 greenhouse:medium
 greenhouse:mercury
+greenhouse:mesh
 greenhouse:mixpanel
 greenhouse:mongodb
 greenhouse:netlify
 greenhouse:netskope
+greenhouse:newrelic
 greenhouse:nextdoor
 greenhouse:nuro
 greenhouse:okta
 greenhouse:omadahealth
 greenhouse:openly
+greenhouse:oportun
+greenhouse:pagerduty
+greenhouse:pendo
+greenhouse:pingidentity
 greenhouse:pinterest
 greenhouse:planetscale
+greenhouse:public
 greenhouse:pulley
+greenhouse:recordedfuture
 greenhouse:reddit
 greenhouse:ripple
 greenhouse:robinhood
 greenhouse:roblox
 greenhouse:rubrik
+greenhouse:salesloft
 greenhouse:samsara
 greenhouse:scaleai
 greenhouse:sigmacomputing
 greenhouse:skillsoft
+greenhouse:smartsheet
 greenhouse:sofi
+greenhouse:squarespace
 greenhouse:starburst
 greenhouse:stripe
 greenhouse:sumologic
@@ -110,36 +149,57 @@ greenhouse:tanium
 greenhouse:temporaltechnologies
 greenhouse:tines
 greenhouse:tripactions
+greenhouse:truebill
 greenhouse:turing
 greenhouse:twilio
 greenhouse:twitch
 greenhouse:udemy
+greenhouse:upgrade
 greenhouse:upstart
 greenhouse:vercel
 greenhouse:verkada
 greenhouse:waymo
 greenhouse:webflow
+greenhouse:workboard
+greenhouse:wrike
 greenhouse:yugabyte
 greenhouse:zocdoc
+greenhouse:zoominfo
 greenhouse:zscaler
 
-# --- lever (22 boards) ---------------------------------------------
+# --- lever — TIER 1 (38 boards) ------------------------------
+lever:15five
 lever:anchorage
+lever:angellist
+lever:appen
 lever:basis
 lever:binance
 lever:carbonhealth
+lever:fundrise
+lever:gopuff
+lever:greenlight
 lever:hive
+lever:jobvite
+lever:jumpcloud
 lever:kraken
 lever:levelai
 lever:loftorbital
+lever:logrocket
 lever:lyrahealth
 lever:neon
+lever:nium
+lever:outreach
+lever:people-ai
 lever:pigment
 lever:plaid
+lever:prosper
+lever:quantummetric
 lever:ro
 lever:saviynt
 lever:secureframe
 lever:shieldai
+lever:sonarsource
+lever:sophos
 lever:thinkahead
 lever:trellis
 lever:truv
@@ -147,7 +207,7 @@ lever:voleon
 lever:wealthfront
 lever:zoox
 
-# --- ashby (106 boards) ---------------------------------------------
+# --- ashby — TIER 3, off by default (106 boards) --------------
 ashby:abridge
 ashby:airbyte
 ashby:alchemy
