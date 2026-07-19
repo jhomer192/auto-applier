@@ -101,7 +101,7 @@ to a different, cleaner job instead.
 Waves were running dry because every session sourced the same way — web search plus the
 same ~30 famous boards — so it kept re-finding jobs already in `applied.csv` / `seen.csv`
 and spun in a circle. `scripts/source.py` fixes that: it queries **live** ATS board APIs
-across a 542-board pool (436 Tier-1 Greenhouse/Lever) and **rotates** which boards it hits, weighted by how long since
+across a 701-board pool (595 Tier-1 Greenhouse/Lever) and **rotates** which boards it hits, weighted by how long since
 each was last mined, with real randomness on top — so consecutive sessions land on
 different companies. Verified: three back-to-back runs returned 66 jobs across 41
 companies with **zero** overlap.
