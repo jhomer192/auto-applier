@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--headless", "--browser", "chromium", "--proxy-server", "socks5://127.0.0.1:40000"]
+      "command": "/opt/auto-applier/browser_launch.sh",
+      "args": []
     }
   }
 }
