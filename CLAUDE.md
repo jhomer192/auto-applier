@@ -270,7 +270,14 @@ relocating to the Bay); regenerate them with `python3 scripts/make_resumes.py da
   your OWN — no per-batch go-ahead. Keep going until the sourced queue is exhausted or Jack
   says stop.
 - After each wave, post one line — `Applied: N | Failed: M | Skipped: K` plus the notable
-  applies — then immediately continue to the next wave.
+  applies — then **`python3 scripts/wave.py end`** and immediately continue to the next
+  wave. That makes the next turn start with clean context instead of dragging a wave's
+  worth of stale Playwright snapshots behind it. Nothing is lost: applied/seen/retry, the
+  board rotation, and the sourced queue all live on disk. It is NOT a limit — no counter,
+  no cut-off, you decide when a wave is done and the next one starts immediately. Do NOT
+  do this per job: a fresh session re-reads this file and `profile.yaml` first, and
+  discards the form-handling patterns that make later applies in a wave much faster.
+  (Jack can also force it any time with `/fresh` in Discord.)
 - A silent multi-hour turn is a failure even if it eventually works: report progress as you
   go (a short line every few applies) so Jack can see you're alive and actually applying.
 - Breadth WITH relevance: apply broadly across the lanes, but only to roles that pass the

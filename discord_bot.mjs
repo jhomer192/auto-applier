@@ -18,7 +18,7 @@ import { spawn } from 'child_process'
 import { createInterface } from 'readline'
 import {
   readFileSync, writeFileSync, appendFileSync,
-  existsSync, mkdirSync,
+  existsSync, mkdirSync, unlinkSync,
 } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -72,6 +72,36 @@ function saveSessions(sessions) {
 }
 
 const sessions = loadSessions()   // { [channelId]: sessionId }
+
+// ── Wave-boundary context reset ──────────────────────────────────────────────
+// A wave accumulates enormous context (mostly Playwright snapshots, worthless once
+// you've left the page), and none of it is load-bearing: every durable fact lives in
+// data/*.csv and the sourced queue file. So at a wave boundary the brain calls
+// `python3 scripts/wave.py end`, which drops this flag; the next turn then starts a
+// fresh claude session instead of resuming.
+//
+// This is NOT a limit on anything. Nothing is counted, nothing is cut short, and no
+// turn is ever stopped — the brain itself decides when a wave is done, and work
+// continues immediately in the new session. Per-JOB resets were considered and
+// rejected: each fresh session re-reads CLAUDE.md + profile before acting, and throws
+// away the form-handling patterns that make later applies in a wave much faster.
+const SESSION_RESET_FLAG = join(__dirname, 'data', 'session_reset.flag')
+
+function consumeSessionReset(channelId) {
+  if (!existsSync(SESSION_RESET_FLAG)) return false
+  try { unlinkSync(SESSION_RESET_FLAG) } catch { /* already gone — fine */ }
+  delete sessions[channelId]
+  saveSessions(sessions)
+  return true
+}
+
+function clearSession(channelId) {
+  const had = Boolean(sessions[channelId])
+  delete sessions[channelId]
+  saveSessions(sessions)
+  try { if (existsSync(SESSION_RESET_FLAG)) unlinkSync(SESSION_RESET_FLAG) } catch { /* fine */ }
+  return had
+}
 
 // ── In-flight working messages, persisted so a restart can finalize them ─────
 // (A service restart used to leave "🔧 working — 17174s…" frozen forever.)
@@ -233,6 +263,9 @@ function stopChannel(channelId) {
 // onMilestone gets apply-result lines ("Applied: …", "BLOCKED …") for the
 // durable per-application feed. Returns { text, sessionId, stopped, limitedAt }
 function runClaude(prompt, channelId, onActivity, onMilestone) {
+  if (consumeSessionReset(channelId)) {
+    logLine(`WAVE RESET: starting a fresh session for channel=${channelId}`)
+  }
   const existingSession = sessions[channelId]
 
   return new Promise((resolve) => {
@@ -471,6 +504,7 @@ const HELP = [
   '**Auto-applier commands**',
   '`/stop` (or `/cancel`) — interrupt the current turn and drop anything queued',
   '`/status` — is it running, how long, how many queued',
+  '`/fresh` — clear my context; the next message starts a fresh session (CSVs untouched)',
   '`/help` — this message',
   '',
   'Otherwise just talk to me — I apply autonomously across Zach\'s target lanes,',
@@ -501,6 +535,16 @@ async function handleCommand(msg, cmd) {
       (sess ? ` · session \`${sess.slice(0, 8)}…\`` : '')
     trackOwnText(statusText)
     await msg.channel.send(statusText).catch(() => {})
+    return true
+  }
+  if (cmd === '/fresh' || cmd === '/newsession') {
+    const had = clearSession(msg.channelId)
+    const replyText = had
+      ? '🧹 Context cleared — the next message starts a fresh session. Durable state (applied/seen/retry CSVs, the board rotation) is untouched.'
+      : 'Already running a fresh session — nothing to clear.'
+    trackOwnText(replyText)
+    await msg.channel.send(replyText).catch(() => {})
+    logLine(`FRESH by ${msg.author.username}: cleared=${had}`)
     return true
   }
   if (cmd === '/help') {
