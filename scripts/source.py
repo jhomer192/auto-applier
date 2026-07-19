@@ -39,12 +39,37 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT))
 from url_norm import normalize as _norm  # noqa: E402
-from bot.bay_area import is_bay_area  # noqa: E402  (pure predicate; not the inert chat layer)
+
+# Bay Area terms, inlined from bot/bay_area.py — the deployed VPS runtime has no bot/
+# directory, so this script must stand alone. Keep the two lists in sync if either moves.
+BAY_TERMS = (
+    "bay area", "sf bay", "san francisco bay", "silicon valley", "the peninsula",
+    "north bay", "east bay", "south bay",
+    "san francisco", "sf,", "s.f.", "daly city", "brisbane", "south san francisco",
+    "san mateo", "redwood city", "palo alto", "menlo park", "foster city",
+    "burlingame", "san bruno", "millbrae", "san carlos", "belmont", "half moon bay",
+    "east palo alto",
+    "san jose", "santa clara", "sunnyvale", "mountain view", "cupertino", "milpitas",
+    "los gatos", "campbell", "saratoga", "morgan hill", "gilroy",
+    "oakland", "berkeley", "emeryville", "alameda", "fremont", "hayward", "richmond",
+    "walnut creek", "pleasanton", "dublin, ca", "san ramon", "concord", "union city",
+    "newark, ca", "castro valley", "san leandro", "pleasant hill", "danville",
+    "livermore", "martinez", "lafayette", "orinda", "albany",
+    "marin", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
+    "larkspur", "tiburon", "petaluma",
+)
+
+
+def is_bay_area(*texts: str) -> bool:
+    """True iff any text names a Bay Area location. Strict: unknown/empty → False."""
+    blob = " ".join(t for t in texts if t).lower()
+    return bool(blob.strip()) and any(term in blob for term in BAY_TERMS)
 
 POOL_PATH = ROOT / "scripts" / "companies.txt"
 ROTATION_PATH = ROOT / "data" / "board_rotation.csv"
 APPLIED_PATH = ROOT / "data" / "applied.csv"
 SEEN_PATH = ROOT / "data" / "seen.csv"
+RETRY_PATH = ROOT / "data" / "retry.csv"  # already queued for another attempt — don't re-surface
 ROTATION_HEADER = ["platform", "token", "last_mined", "hits", "fails"]
 DEAD_AFTER = 4  # consecutive fetch failures before a board is dropped from rotation
 
@@ -227,7 +252,7 @@ def location_ok(location: str, title: str) -> bool:
 
 def load_known_urls() -> set[str]:
     known: set[str] = set()
-    for path in (APPLIED_PATH, SEEN_PATH):
+    for path in (APPLIED_PATH, SEEN_PATH, RETRY_PATH):
         if not path.exists():
             continue
         with path.open(newline="") as f:

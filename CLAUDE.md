@@ -57,24 +57,40 @@ For Greenhouse / Lever / Ashby / Workable direct-apply forms:
    its visible text — don't assume option ids. Visa sponsorship → No. "Worked here before?"
    → No. "How did you hear about us?" → LinkedIn (or Company Website). Demographics/EEO →
    "Decline to self-identify". **Never lie on any field.**
-5. **Resume**: pick the file by lane (see "Resume — pick by lane" below), upload it
-   to the Resume/CV field (`mcp__playwright__browser_file_upload`). Ship it as-is once
-   chosen — do not tailor wording per individual job, only pick the right lane variant.
+5. **Resume — TAILOR it per job (every application):**
+   a. Pick the lane: `security` | `sdr` | `ops` | `general` (see "Resume — pick by lane").
+   b. Write the job-description text you already have (from the page/snapshot) to
+      `data/current_jd.txt` with the Write tool.
+   c. Run: `python3 scripts/tailor_resume.py --lane <lane> --jd data/current_jd.txt`
+      It uses cheap Sonnet/Haiku calls to rewrite the summary around the JD's keywords
+      (truthfully — a Haiku QC gate rejects any fabrication) and writes
+      `data/resume_tailored.pdf`. A `WARN` line just means it fell back to the base lane
+      file — still fine to upload.
+   d. Upload `data/resume_tailored.pdf` to the Resume/CV field
+      (`mcp__playwright__browser_file_upload`). ALWAYS upload the tailored file.
+   Do NOT do the tailoring reasoning yourself — the script offloads it to the cheap models
+   on purpose (saves your quota).
 6. **Submit**, then handle any PIN gate (see Email above).
 7. **Verify success** — look for "thank you" / "application submitted" / a confirmation
    page. Only then record it.
 
 **Blocked-page rule — NEVER grind.** If a job hits an image/interactive CAPTCHA, a login
 wall, a heavy custom portal, or a Workday multi-step: make AT MOST one quick attempt, then
-`python3 scripts/seen.py mark` it, note it in one line, and MOVE ON to the next job
-immediately. Do NOT spend more than ~2 minutes or a handful of actions on any single blocked
-job — breadth across frictionless Greenhouse/Lever/Ashby beats grinding one captcha. Never
+queue it for RETRY and MOVE ON to the next job immediately:
+`python3 scripts/retry.py mark "$JOB_URL" "<Company>" "<Title>" "<reason>"`
+⚠️ Use `retry.py`, NOT `seen.py`, for anything blocked. `seen.py` means "never revisit" —
+putting a blocked job there permanently buries a role that is still open and still a good
+fit. That mistake silently lost 85 live jobs between 2026-06-30 and 2026-07-13 (recovered
+2026-07-15 into `data/retry.csv`). The rule: WE were blocked → `retry.py`. The JOB is unfit
+or closed → `seen.py`. Do NOT spend more than ~2 minutes or a handful of actions on any single blocked
+job — breadth across frictionless Greenhouse/Lever beats grinding one captcha. Never
 claim success you didn't verify.
 
 **No-loop rule — repeated identical actions = you are stuck.** Never fire
 `run_code_unsafe`/JS-eval (or any single tool) over and over against the same form trying to
 force a submit. If a form doesn't submit cleanly after ~2 honest attempts, `python3
-scripts/seen.py mark` it, say one line about why, and MOVE ON to the next job. Watch yourself:
+scripts/retry.py mark` it (we were blocked — it may still be live), say one line about why,
+and MOVE ON to the next job. Watch yourself:
 several actions in a row with no new visible progress means break out immediately — go apply
 to a different, cleaner job instead.
 
@@ -99,7 +115,8 @@ python3 scripts/source.py --stats                # which boards are stalest, wha
 
 Output is TSV: `url  company  title  location  lane`. Everything it prints is already
 
-- deduped against `applied.csv` + `seen.csv` (normalized URLs),
+- deduped against `applied.csv` + `seen.csv` + `retry.csv` (normalized URLs) — so it never
+  duplicates the retry queue you drain at step 0,
 - location-filtered — Bay Area **or** fully-remote-US (Jack, 2026-07-19); other metros
   and all non-US postings are dropped,
 - seniority/SWE-filtered per the HARD FIT FILTER, and
@@ -131,9 +148,15 @@ only decides what's worth opening — it is a first pass on titles, not a fit de
 ```bash
 JOB_URL=<url Jack sent or you found>
 
+# 0. FIRST each wave: drain the retry queue — these are good-fit jobs we were blocked
+#    on, not jobs we rejected. They are the freshest inventory you have.
+python3 scripts/retry.py list 25
+
 # 1. Dedup
 python3 scripts/applied.py check "$JOB_URL"   # MATCH → already applied, stop
 python3 scripts/seen.py    check "$JOB_URL"    # MATCH → already considered
+# After a successful apply OR once confirmed genuinely dead:
+#   python3 scripts/retry.py done "$JOB_URL"
 
 # 2. Identify company / title / platform (WebFetch for plain HTML, or open it in the browser)
 
@@ -166,7 +189,7 @@ python3 scripts/skipped.py check "$COMPANY"    # MATCH → stop
 #     Risk/AML/Compliance · HR/People/Recruiting · Ops/Admin · CS/Support · Data/Biz
 #     Analyst · Content/Comms/Marketing) and passes the HARD FIT FILTER above
 #   - remote or remote-friendly · US-friendly · no sponsorship required
-#   - platform is Greenhouse / Lever / Ashby / Workable (frictionless, direct apply)
+#   - platform is Greenhouse / Lever / non-Turnstile Workable (frictionless, direct apply)
 #   Only ask Jack when a role is genuinely ambiguous (borderline seniority / unclear lane).
 #   Otherwise just apply. NEVER use LinkedIn Easy Apply when a direct apply exists.
 
@@ -224,8 +247,12 @@ anything not in Zachary's actual background.
 - `data/resume.pdf` — legacy default, identical in spirit to resume_security.pdf; use
   resume_security.pdf instead when in doubt.
 Pick by the job's actual lane, not by convenience — a Security lane resume on an SDR
-application undersells the candidate's fit and vice versa. Ship the chosen file as-is,
-same as before — no per-job wording edits.
+application undersells the candidate's fit and vice versa. Then TAILOR it to the specific
+posting via `scripts/tailor_resume.py` (step 5 above) and upload `data/resume_tailored.pdf`.
+The tailoring only rewords/reorders the summary around the JD's real keywords — it never
+invents experience (Sonnet writes, Haiku QC-gates for fabrication, and it falls back to the
+base lane file on any failure). All 4 base files read as San Francisco, CA (Zach is
+relocating to the Bay); regenerate them with `python3 scripts/make_resumes.py data`.
 
 ## Batch behavior (important)
 - **You ARE the apply engine — there is no `apply_jobs` or `application_status` tool.** You
@@ -252,7 +279,9 @@ Direct apply beats LinkedIn Easy Apply — always. Before any `/jobs/view/` navi
 ## Don'ts
 - Don't `wg-quick up`, `openvpn --redirect-gateway`, `iptables -F` — system-wide tunnel = SSH lockout.
 - Don't paste secrets into Telegram. Don't `cat .env`.
-- Don't call `claude -p` as a subprocess — you ARE Claude.
+- Don't do resume-tailoring reasoning yourself — run `scripts/tailor_resume.py` (it uses
+  cheap Sonnet/Haiku subprocesses on purpose). Otherwise you ARE Claude: don't spawn a
+  `claude -p` for the apply work itself.
 - Don't apply twice (`applied.py check` first) or to anything in `skipped_companies.csv`.
 - Don't claim an application succeeded without seeing the confirmation page.
 - Don't reinstate the legacy Python chat layer (`bot/*.py`) — it's inert.
@@ -265,15 +294,75 @@ the channel. In YOUR session: when Jack asks about follow-ups / "who do I need t
 read `data/action_items.csv` and answer from it; mark items `done` when Jack says he
 handled them. Never send email yourself — items are for Jack to act on.
 
+## SITE ROUTING — reduce the sites that block us (2026-07-16)
+Goal: maximize the share of applies that land on platforms that DON'T block, and stop
+burning turns on ones that do. HARD LESSON (2026-07-18, from real retry.csv data): the
+residential tunnel fixes IP *reputation* ONLY. It does NOT beat Cloudflare Turnstile /
+bot-fingerprint at submit time. Ashby, SmartRecruiters, and Turnstile-guarded Workable
+forms block the SUBMIT even on the residential AT&T IP ("residential AT&T IP also blocked",
+"residential IP also stuck in Submitting state"). The tunnel helps Lever + clean page-loads,
+NOT the Turnstile boards. Route by what actually CONVERTS:
+
+TIER 1 — CONVERTS, always try first: Greenhouse (job-boards.greenhouse.io) and Lever
+  (jobs.lever.co), plus Workable forms that do NOT show a Turnstile widget. Direct-apply,
+  no login wall, no captcha. Essentially all successful submits happen here — spend your
+  turns here.
+TIER 2 — none. There is no "works only via residential" tier: the tunnel unblocks no submit
+  that Tier 1 can't already do. Lever is Tier 1 regardless of `proxy_status`.
+TIER 3 — HARD-AVOID (do NOT spend turns; ~0 successful submits ever): Ashby
+  (jobs.ashbyhq.com), SmartRecruiters, ANY Turnstile-guarded form (Workable-with-Turnstile,
+  Cloudflare custom portals), Workday / myworkdayjobs, iCIMS, Taleo, BrassRing. Turnstile
+  boards block at submit regardless of IP; the rest are login-walled / multi-page /
+  bot-hostile. Only touch one if the SAME role has NO Tier-1 posting. NEVER grind these and
+  NEVER `retry.py mark` them — a Turnstile block is permanent for us, not transient.
+
+LEARN blockers: if a submit is blocked even with `proxy_status`=`up` (so it's NOT the IP),
+append one line to `data/blocklist.txt` as `<ats_host>\t<company>\t<reason>` and thereafter
+skip that company on that ATS for the wave. Check `data/blocklist.txt` at wave start and
+don't re-attempt anything listed. This makes the blocker set shrink over time instead of
+re-hitting the same walls. `retry.py mark` still applies for transient/IP blocks.
+
 ## Platform reliability — learned 2026-07-09
 Ashby and Lever have repeatedly hCaptcha/Cloudflare-blocked this VPS's IP across many
 companies (Hive — lost an entire 11-job batch, Anchorage, BIS, Airwallex, Pulse, Tavrn.ai,
 Vanta, Baseten; GGRC's Workable form hit Cloudflare Turnstile once too). These blocks have
-produced zero successful submissions despite repeated attempts. **Deprioritize Ashby/Lever:**
+produced zero successful submissions despite repeated attempts. **Ashby = HARD-AVOID always (Turnstile blocks the submit even on residential — see SITE ROUTING above). Lever = Tier 1, fine always. Each wave:**
 try Greenhouse, Workable, SmartRecruiters, and direct company-board browsing FIRST each wave.
 If an Ashby/Lever hCaptcha appears, take the one allowed attempt (per the existing
-Blocked-page rule), mark seen, and don't burn a second attempt on that platform this wave —
-it will not clear.
+Blocked-page rule), `retry.py mark` it (NOT seen — it is still live), and don't burn a
+second attempt on that platform this wave.
+
+**Anti-detection setup (2026-07-15, DEPLOYED — do not undo).** The browser is now much
+harder to fingerprint as a bot. `.mcp.json` runs Playwright **headed** (real Chromium, not
+`--headless`) inside a virtual display (`xvfb-run`), with a persistent profile
+(`data/browser_profile`), a real Chrome UA + 1366x768 viewport, and a surgical
+`stealth_init.js` that only spoofs the two datacenter tells headed can't fix (WebGL renderer
+= Intel UHD 620 instead of SwiftShader; deviceMemory). MEASURED end-to-end through the MCP:
+**0 of the classic headless tells** remain (navigator.webdriver false, plugins present,
+window.chrome present, WebGL looks like a real GPU) — verified the real Vanta Ashby form
+still renders AND its fields are typeable, so React hydration is intact (this is the check
+the deleted-2026-06-21 stealth layer failed). Do NOT re-add `--headless`, do NOT add
+navigator/webdriver overrides to `stealth_init.js` (that class of override froze Greenhouse
+hydration before), and do NOT change `.mcp.json` yourself.
+
+**Egress IP -- residential tunnel (2026-07-16, DEPLOYED -- the fix for the IP block).**
+`.mcp.json` no longer hardcodes a proxy. It launches the browser via `browser_launch.sh`,
+which health-checks a reverse SOCKS tunnel on `127.0.0.1:1080` and chooses:
+  - tunnel UP   -> egress through Jack's home **residential AT&T IP (Palo Alto, AS7018)**,
+    which fixes IP *reputation* (helps Lever + clean page-loads). It does NOT beat Cloudflare
+    Turnstile at submit: Ashby/SmartRecruiters/Turnstile-Workable still block residential
+    (proven 2026-07-18) -- those are Tier 3 HARD-AVOID, not tunnel-fixable;
+  - tunnel DOWN -> **direct, no proxy** (raw Hetzner IP) so an apply NEVER hard-fails.
+The wrapper writes the live state to `data/proxy_status` (`up`/`down`). Do NOT hardcode
+`--proxy-server` back into `.mcp.json` -- that reintroduces the dead-proxy failure where every
+page load dies whenever the tunnel is down. Do NOT change `.mcp.json` or the wrapper yourself.
+
+**Tunnel state affects LEVER only** (Ashby/SmartRecruiters/Turnstile are Tier 3 HARD-AVOID
+regardless — see SITE ROUTING). When `proxy_status` -> `down`, Lever submits get scored on the
+Hetzner datacenter IP and may block: take the one allowed attempt, `retry.py mark` it (stays
+live), and move on to frictionless Greenhouse, which submits fine from either IP. When
+`proxy_status` -> `up`, Lever egresses residential and submits normally. Do NOT attempt Ashby /
+SmartRecruiters / Turnstile forms in either state — the tunnel does not beat Turnstile.
 
 Web/Google search results for job postings are frequently stale — a large share of turns are
 lost to already dead/expired links. When you already know good target companies, prefer
@@ -313,8 +402,10 @@ search → one apply → one search. Fewer context switches between sourcing and
 means more of each wave's time goes to actual applications.
 
 ## Sourcing priority & tighter filter (2026-07-09) — READ THIS, it governs targeting
-Zachary has NO professional work experience yet (one 3-month content subcontract + certs +
-self-study). So conversion is a numbers game, but only if we aim at roles that actually hire
+Zachary is early-career (one 3-month content subcontract + M.S. coursework + certs +
+self-study labs). JACK'S STANDING DIRECTIVE (2026-07-13): when a form asks years of
+experience, answer 2 - count his graduate work, subcontract, certifications, and hands-on
+labs as experience. Do not present him as having zero experience on any form. So conversion is a numbers game, but only if we aim at roles that actually hire
 zero-experience early-career candidates AND where his background is a signal, not noise.
 Spraying at roles that require experience (Data Analyst, Exec Assistant to a CTO, mid-level
 "Business Partner") burns applications for ~0 return.
@@ -353,3 +444,37 @@ zero experience and are his highest-conversion targets.
 
 This does NOT change the Bay-Area-only rule, the dedup rules, or the apply mechanics — it only
 sharpens WHICH jobs are worth an application. Quality of targeting over raw count.
+
+## Standing directives from Jack (2026-07-13) + fresh sourcing (2026-07-15)
+
+These came from Discord mid-session and are now permanent - they survive /stop and resumes:
+
+- **Years of experience = 2** on every form (see Sourcing priority above). Jack's explicit call.
+- **Teaching / tutoring roles are an APPROVED lane** when they do NOT require a teaching
+  degree/credential/license (e.g. online tutor, instructional aide, test-prep, ed-tech support).
+  Roles requiring a credential or state license -> drop.
+- **MSSPs — MEASURED 2026-07-15, mostly a dead end. Do not spend a wave here.** Probed all 12
+  (Arctic Wolf, Deepwatch, eSentire, Secureworks, Expel, Red Canary, Huntress, Critical Start,
+  Binary Defense, BlueVoyant, Blackpoint, ReliaQuest): only 3 have a public Greenhouse/Lever/
+  Ashby board (Huntress, Expel, Deepwatch) — the other 9 are Workday/iCIMS, which the
+  Blocked-page rule tells you to skip anyway. Of those 3: Huntress' junior roles are Australia,
+  Expel's are Ireland, Deepwatch has 4 roles (all Director/Lead/Manager, Tampa). **Net: ZERO
+  applicable roles.** MSSP SOC hiring happens in Denver/Tampa/Ireland/Romania/Australia, not the
+  Bay — it collides head-on with the Bay-Area-only rule. The applier's own 8/10 "MSSP is the #1
+  strategy" ranking was wrong; it ranked on fit and never checked inventory.
+- **GRC vendors — the real inventory, but gated on the Ashby block.** Vanta, Drata, Secureframe,
+  Thoropass, Hyperproof, LogicGate, OneTrust. Measured 2026-07-15: 458 live roles across their
+  boards, ~7 pass lane+seniority+Bay/remote-US. The good ones are on **Ashby/Lever** (Vanta SDR
+  Growth + SDR Upmarket, both San Francisco, $94K–$110K, live and unapplied) — i.e. exactly the
+  platform that IP-blocks us. **This channel unlocks only if the proxy question above is
+  resolved.** Confirmed live 2026-07-15 by rendering the form.
+
+**The pool is NOT "exhausted" — every channel is CLOSED, which is a different problem:**
+1. Greenhouse — genuinely swept (2,186 seen).
+2. Ashby/Lever — IP-blocked at submit; 85 good-fit jobs sat buried in seen.csv until 2026-07-15.
+3. Workday/iCIMS — skipped by rule (where 9/12 MSSPs live).
+4. Government/NEOGOV — blocked on Zachary's 3 references (Jack must get them from Zach).
+5. LinkedIn — no auth cookies.
+So do NOT report "no jobs left" as if the market is empty. Report WHICH gate is shut. The
+highest-value inventory sits behind gate 2 (Ashby/Lever) and gate 4 (references) — both are
+one decision from Jack, not more sourcing effort. Drain `retry.py list` before ever claiming dry.
