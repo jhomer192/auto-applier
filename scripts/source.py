@@ -15,13 +15,20 @@ Output is TSV — url, company, title, location, lane — one job per line, alre
 deduped against applied.csv + seen.csv and already location/seniority filtered. Fit
 decisions and the apply itself are still yours; this only decides what to look at.
 
-Rotation: data/board_rotation.csv holds last_mined/hits/fails per board. Boards are
-sampled weighted by staleness (Efraimidis–Spirakis), so the longest-unmined boards
-are the likeliest picks but every board keeps a real chance — the randomness is what
-stops each session converging on the same pool. Boards that 404 four times running
-are pruned automatically.
+Rotation: data/board_rotation.csv holds last_mined/mines/hits/fails per board. Boards
+are sampled weighted by staleness × productivity (Efraimidis–Spirakis), so the
+longest-unmined boards are the likeliest picks, boards that have produced a matching
+job get a boost, and boards mined 3+ times without one get demoted (never dropped —
+postings turn over). Every board keeps a real chance: that randomness is what stops
+each session converging on the same pool. Boards that 404 four times running are
+pruned automatically.
 
-Pool lives in scripts/companies.txt (`platform:token`). Add companies there.
+Default platforms are Greenhouse + Lever only — Ashby is Tier 3 HARD-AVOID per
+CLAUDE.md SITE ROUTING (blocks at submit regardless of IP), so sourcing it would fill
+a wave with applications that can never land. Pass --platforms to override.
+
+Pool lives in scripts/companies.txt (`platform:token`); scripts/companies_reserve.txt
+holds verified-live boards held back for when waves run thin. Add companies there.
 """
 from __future__ import annotations
 
@@ -75,7 +82,7 @@ BLOCKLIST_PATH = ROOT / "data" / "blocklist.txt"  # "<ats_host>\t<company>\t<rea
 # blocks at submit regardless of IP (Tier 3 HARD-AVOID), so it is OFF by default: sourcing
 # Ashby jobs just fills a wave with applications that can never land.
 DEFAULT_PLATFORMS = ("greenhouse", "lever")
-ROTATION_HEADER = ["platform", "token", "last_mined", "hits", "fails"]
+ROTATION_HEADER = ["platform", "token", "last_mined", "mines", "hits", "fails"]
 DEAD_AFTER = 4  # consecutive fetch failures before a board is dropped from rotation
 
 # --- lanes -------------------------------------------------------------------
@@ -185,6 +192,7 @@ def load_rotation() -> dict[tuple[str, str], dict]:
                 key = (row.get("platform", ""), row.get("token", ""))
                 state[key] = {
                     "last_mined": row.get("last_mined", ""),
+                    "mines": int(row.get("mines") or 0),
                     "hits": int(row.get("hits") or 0),
                     "fails": int(row.get("fails") or 0),
                 }
@@ -197,7 +205,7 @@ def save_rotation(state: dict[tuple[str, str], dict]) -> None:
         w = csv.writer(f)
         w.writerow(ROTATION_HEADER)
         for (platform, token), v in sorted(state.items()):
-            w.writerow([platform, token, v["last_mined"], v["hits"], v["fails"]])
+            w.writerow([platform, token, v["last_mined"], v.get("mines", 0), v["hits"], v["fails"]])
 
 
 def _age_hours(last_mined: str) -> float:
@@ -214,16 +222,26 @@ def _age_hours(last_mined: str) -> float:
 
 
 def pick_boards(pool, state, k: int) -> list[tuple[str, str]]:
-    """Weighted sample without replacement, weight = staleness.
+    """Weighted sample without replacement, weight = staleness × productivity.
 
     Efraimidis–Spirakis: key = random() ** (1/weight), take the top k. Stale boards
     win most of the time, but every live board keeps a real chance — that residual
     randomness is what makes two consecutive sessions see different companies.
+
+    Productivity is the explore/exploit half: a board that has produced a matching job
+    before is worth more than one mined three times for nothing (most big boards have
+    no Bay-Area entry-level roles at all). Duds are demoted, never dropped — their
+    postings turn over, and staleness eventually floats them back up.
     """
     live = [b for b in pool if state.get(b, {}).get("fails", 0) < DEAD_AFTER]
     keyed = []
     for b in live:
-        weight = 1.0 + _age_hours(state.get(b, {}).get("last_mined", ""))
+        s = state.get(b, {})
+        weight = 1.0 + _age_hours(s.get("last_mined", ""))
+        if s.get("hits", 0) > 0:
+            weight *= 2.0                      # exploit: it has paid out before
+        elif s.get("mines", 0) >= 3:
+            weight *= 0.25                     # demote: mined repeatedly, never a match
         keyed.append((random.random() ** (1.0 / weight), b))
     keyed.sort(reverse=True)
     return [b for _, b in keyed[:k]]
@@ -364,13 +382,14 @@ def main(argv: list[str]) -> int:
     rows, ok_boards, dead_boards = [], 0, 0
 
     for board, postings in results:
-        entry = state.setdefault(board, {"last_mined": "", "hits": 0, "fails": 0})
+        entry = state.setdefault(board, {"last_mined": "", "mines": 0, "hits": 0, "fails": 0})
         if postings is None:
             entry["fails"] += 1
             dead_boards += 1
             continue
         entry["fails"] = 0
         entry["last_mined"] = now
+        entry["mines"] = entry.get("mines", 0) + 1
         ok_boards += 1
         if board[1].lower() in blocked:
             continue
