@@ -25,8 +25,8 @@ wave instead of web-searching:
 
 ## Steps
 - [x] Decide location scope (Jack: Bay Area + fully-remote-US)
-- [ ] `scripts/companies.txt` — expanded pool
-- [ ] `scripts/source.py` — rotation, fetch, filter, dedup, output
-- [ ] Verify: run it, confirm live URLs + that two consecutive runs return different companies
-- [ ] Update `CLAUDE.md` sourcing section to make it step 0 of every wave
-- [ ] Commit to main (solo repo), deploy note for the VPS
+- [x] `scripts/companies.txt` — 236 boards, each verified live
+- [x] `scripts/source.py` — rotation, fetch, filter, dedup, output
+- [x] Verify — 3 runs, 66 jobs, 41 companies, zero overlap, zero unreachable
+- [x] Update `CLAUDE.md` sourcing section
+- [x] Commit to main (40e6848, pushed). VPS still needs a pull.
