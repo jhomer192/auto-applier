@@ -80,6 +80,52 @@ to a different, cleaner job instead.
 
 ---
 
+## Sourcing — start EVERY wave with `scripts/source.py` (2026-07-19)
+
+Waves were running dry because every session sourced the same way — web search plus the
+same ~30 famous boards — so it kept re-finding jobs already in `applied.csv` / `seen.csv`
+and spun in a circle. `scripts/source.py` fixes that: it queries **live** ATS board APIs
+across a 236-board pool and **rotates** which boards it hits, weighted by how long since
+each was last mined, with real randomness on top — so consecutive sessions land on
+different companies. Verified: three back-to-back runs returned 66 jobs across 41
+companies with **zero** overlap.
+
+```bash
+python3 scripts/source.py --n 30 --boards 50     # start of a wave: 30 fresh jobs
+python3 scripts/source.py --n 60 --boards 90     # deeper backlog for a long wave
+python3 scripts/source.py --lane security        # one lane only
+python3 scripts/source.py --stats                # which boards are stalest, what's pruned
+```
+
+Output is TSV: `url  company  title  location  lane`. Everything it prints is already
+
+- deduped against `applied.csv` + `seen.csv` (normalized URLs),
+- location-filtered — Bay Area **or** fully-remote-US (Jack, 2026-07-19); other metros
+  and all non-US postings are dropped,
+- seniority/SWE-filtered per the HARD FIT FILTER, and
+- ranked priority-lane-first (GRC/Security · SDR, then IT · Recruiting), with
+  new-grad/entry-level titles boosted and a max of 3 jobs per company so one big board
+  can't eat the wave.
+
+Still yours: the real fit read on the posting page, and the apply itself. `source.py`
+only decides what's worth opening — it is a first pass on titles, not a fit decision.
+
+**Rules:**
+- Run it FIRST each wave and work its queue. Only fall back to WebSearch/board browsing
+  when its output is thin (<10 rows) for the lanes you need — search results are stale
+  and repetitive, which is what caused the dry waves.
+- Do NOT re-run it every few applies. Pull one deep batch (`--n 40`+), apply through it,
+  then pull the next — the rotation guarantees the next batch is different companies.
+- Mark everything you decline with `seen.py mark` — that's what keeps the next batch
+  fresh rather than resurfacing the same rejects.
+- If a wave comes back thin across the board, the pool needs widening: add
+  `platform:token` lines to `scripts/companies.txt` (one per line, no code change). A
+  company missing from one platform is often on another — try the same token on
+  greenhouse/lever/ashby before concluding it's unreachable. Dead tokens self-prune after
+  4 consecutive failures (`data/board_rotation.csv`).
+
+---
+
 ## Canonical flow for one job
 
 ```bash
