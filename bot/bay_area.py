@@ -23,20 +23,25 @@ _BAY_TERMS: set[str] = {
     # umbrella
     "bay area", "sf bay", "san francisco bay", "silicon valley", "the peninsula",
     "north bay", "east bay", "south bay",
+    # Names shared with better-known places elsewhere are qualified with ", ca" —
+    # bare "brisbane" matched an Australian role, bare "albany"/"lafayette"/"saratoga"/
+    # "union city"/"richmond"/"danville"/"concord"/"belmont"/"dublin"/"newark" would
+    # all match their East Coast or foreign namesakes. Keep in sync with scripts/source.py.
     # San Francisco
-    "san francisco", "sf,", "s.f.", "daly city", "brisbane", "south san francisco",
+    "san francisco", "sf,", "s.f.", "daly city", "brisbane, ca", "south san francisco",
     # Peninsula
     "san mateo", "redwood city", "palo alto", "menlo park", "foster city",
-    "burlingame", "san bruno", "millbrae", "san carlos", "belmont", "half moon bay",
+    "burlingame", "san bruno", "millbrae", "san carlos", "belmont, ca", "half moon bay",
     "east palo alto",
     # South Bay / Silicon Valley
     "san jose", "santa clara", "sunnyvale", "mountain view", "cupertino", "milpitas",
-    "los gatos", "campbell", "saratoga", "morgan hill", "gilroy",
+    "los gatos", "campbell, ca", "saratoga, ca", "morgan hill", "gilroy",
     # East Bay
-    "oakland", "berkeley", "emeryville", "alameda", "fremont", "hayward", "richmond",
-    "walnut creek", "pleasanton", "dublin", "san ramon", "concord", "union city",
-    "newark", "castro valley", "san leandro", "pleasant hill", "danville", "livermore",
-    "martinez", "lafayette", "orinda", "albany",
+    "oakland", "berkeley", "emeryville", "alameda", "fremont, ca", "hayward",
+    "richmond, ca", "walnut creek", "pleasanton", "dublin, ca", "san ramon",
+    "concord, ca", "union city, ca", "newark, ca", "castro valley", "san leandro",
+    "pleasant hill", "danville, ca", "livermore",
+    "martinez, ca", "lafayette, ca", "orinda", "albany, ca",
     # North Bay / Marin
     "marin", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
     "larkspur", "tiburon", "petaluma",

@@ -49,19 +49,24 @@ from url_norm import normalize as _norm  # noqa: E402
 
 # Bay Area terms, inlined from bot/bay_area.py — the deployed VPS runtime has no bot/
 # directory, so this script must stand alone. Keep the two lists in sync if either moves.
+# Names that are ONLY Bay Area places get a bare entry. Names that also exist elsewhere
+# in the world are qualified with ", ca" — "Brisbane" alone matched an Australian BDR
+# role on 2026-07-19, and Albany/Lafayette/Saratoga/Union City/Richmond/Danville/
+# Concord/Belmont all have better-known namesakes outside California.
 BAY_TERMS = (
     "bay area", "sf bay", "san francisco bay", "silicon valley", "the peninsula",
     "north bay", "east bay", "south bay",
-    "san francisco", "sf,", "s.f.", "daly city", "brisbane", "south san francisco",
+    "san francisco", "sf,", "s.f.", "daly city", "brisbane, ca", "south san francisco",
     "san mateo", "redwood city", "palo alto", "menlo park", "foster city",
-    "burlingame", "san bruno", "millbrae", "san carlos", "belmont", "half moon bay",
+    "burlingame", "san bruno", "millbrae", "san carlos", "belmont, ca", "half moon bay",
     "east palo alto",
     "san jose", "santa clara", "sunnyvale", "mountain view", "cupertino", "milpitas",
-    "los gatos", "campbell", "saratoga", "morgan hill", "gilroy",
-    "oakland", "berkeley", "emeryville", "alameda", "fremont", "hayward", "richmond",
-    "walnut creek", "pleasanton", "dublin, ca", "san ramon", "concord", "union city",
-    "newark, ca", "castro valley", "san leandro", "pleasant hill", "danville",
-    "livermore", "martinez", "lafayette", "orinda", "albany",
+    "los gatos", "campbell, ca", "saratoga, ca", "morgan hill", "gilroy",
+    "oakland", "berkeley", "emeryville", "alameda", "fremont, ca", "hayward",
+    "richmond, ca", "walnut creek", "pleasanton", "dublin, ca", "san ramon",
+    "concord, ca", "union city, ca", "newark, ca", "castro valley", "san leandro",
+    "pleasant hill", "danville, ca", "livermore", "martinez, ca", "lafayette, ca",
+    "orinda", "albany, ca",
     "marin", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
     "larkspur", "tiburon", "petaluma",
 )
@@ -95,6 +100,11 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         "information security", "infosec", "security operations", "threat",
         "incident response", "vulnerability", "compliance analyst", "risk analyst",
         "security compliance", "trust and safety", "trust & safety",
+        # Security-consultancy titles. Zach applied to three Coalfire FedRAMP roles on
+        # 2026-07-19 that source.py couldn't see — it found them only by browsing the
+        # board directly. These are squarely in-lane for a CompTIA-certified candidate.
+        "fedramp", "soc 2", "iso 27001", "security assessment", "security consultant",
+        "compliance consultant", "identity and access", "iam analyst",
     )),
     "sdr": (1, (
         "sales development", "business development representative", "bdr", "sdr",
@@ -108,7 +118,7 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
     "people": (2, (
         "recruiting coordinator", "recruiting associate", "talent coordinator",
         "people operations", "people coordinator", "hr coordinator", "hr associate",
-        "onboarding specialist", "sourcer",
+        "onboarding specialist",
     )),
     "finance": (3, (
         "finance associate", "financial analyst", "risk operations", "aml",
@@ -136,16 +146,22 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
 
 # Substring kill-list — seniority he can't reach, and technical ICs needing a coding
 # interview. Mirrors the HARD FIT FILTER in CLAUDE.md; keep the two in sync.
+# The "executive"/"sourcer"/contract entries came out of the 2026-07-19 wave, where
+# 54 of 72 sourced jobs were rejected by the brain after opening them — Account
+# Executive and Customer Success Executive are quota roles, recruiting sourcer roles
+# want recruiting experience, and contract/temp postings aren't what he's after.
 EXCLUDE = (
     "senior", "sr.", "sr ", "(sr", "sr)", "staff", "principal", "director", "vp ",
     "vice president", "head of", "manager", "lead ", " lead", "architect", "chief",
-    "executive director", "executive assistant", "business partner", "commander",
+    "executive", "business partner", "commander", "sourcer",
+    "contract", "temporary", "temp ", "part time", "part-time", "seasonal",
     " ii", " iii", " iv", "level 2", "level 3",
     "software engineer", "software developer", "developer", "engineer", "engineering",
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
     "counsel", "attorney", "paralegal", "legal", "nurse", "clinical", "physician",
     "pharmac", "cpa", "tax ", "audit", "accountant", "intern", "phd",
+    "expression of interest", "talent pool", "general application",  # pipelines, not reqs
 )
 # Signals a posting is calibrated for zero experience — these get ranked up.
 EARLY_SIGNALS = (
@@ -168,6 +184,11 @@ US_REMOTE = (
     "united states", "usa", "u.s.", "us-remote", "remote - us", "remote, us",
     "remote (us", "us remote", "anywhere in the us", "nationwide", "remote us",
 )
+# Board hosts that only ever serve a non-US entity. A posting on one of these is
+# presumed foreign unless its location says otherwise outright — "Remote" on a UK
+# board means remote-in-the-UK. Caught 2026-07-19: three EU-board applies went out
+# (Nscale Operations UK Ltd among them) because the location string alone looked clean.
+FOREIGN_HOSTS = ("eu.greenhouse.io",)
 
 
 # --- pool + rotation state ---------------------------------------------------
@@ -261,11 +282,15 @@ def classify(title: str, lane_filter: str | None) -> str | None:
     return None
 
 
-def location_ok(location: str, title: str) -> bool:
+def location_ok(location: str, title: str, url: str = "") -> bool:
     """Bay Area, or a fully-remote-US role (Jack, 2026-07-19). Everything else drops."""
     blob = f"{location} {title}".lower()
     if any(x in blob for x in NON_US):
         return False
+    if any(h in url.lower() for h in FOREIGN_HOSTS):
+        # Foreign board: the location has to name a US place itself. A bare "Remote"
+        # is remote-in-that-country, and inheriting it is how the EU leak happened.
+        return is_bay_area(location) or any(x in location.lower() for x in US_REMOTE)
     if is_bay_area(location, title):
         return True
     if "remote" in blob and any(x in blob for x in US_REMOTE):
@@ -398,7 +423,7 @@ def main(argv: list[str]) -> int:
             if not url or _norm(url) in known:
                 continue
             lane = classify(title, args.lane)
-            if not lane or not location_ok(p["location"], title):
+            if not lane or not location_ok(p["location"], title, url):
                 continue
             known.add(_norm(url))
             tier = LANES[lane][0]
@@ -429,10 +454,11 @@ def main(argv: list[str]) -> int:
         print("\t".join([r["url"], r["company"], r["title"], r["location"], r["lane"]]))
 
     lanes_seen = ", ".join(sorted({r["lane"] for r in rows})) or "none"
+    rotated = "Rotation updated; next run mines different boards." if not args.no_rotate \
+        else "Rotation NOT updated (--no-rotate) — next run may mine these same boards."
     print(
         f"\n[source] {len(rows)} fresh jobs from {ok_boards} boards "
-        f"({dead_boards} unreachable) — lanes: {lanes_seen}. "
-        f"Rotation updated; next run mines different boards.",
+        f"({dead_boards} unreachable) — lanes: {lanes_seen}. {rotated}",
         file=sys.stderr,
     )
     return 0
