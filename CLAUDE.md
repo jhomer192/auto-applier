@@ -141,10 +141,13 @@ only decides what's worth opening — it is a first pass on titles, not a fit de
 - Mark everything you decline with `seen.py mark` — that's what keeps the next batch
   fresh rather than resurfacing the same rejects.
 - If a wave comes back thin across the board, the pool needs widening: add
-  `platform:token` lines to `scripts/companies.txt` (one per line, no code change) — `scripts/companies_reserve.txt` holds 562 verified-live Greenhouse boards held back for exactly this, move lines across. A
-  company missing from one platform is often on another — try the same token on
-  greenhouse/lever/ashby before concluding it's unreachable. Dead tokens self-prune after
-  4 consecutive failures (`data/board_rotation.csv`).
+  `platform:token` lines to `scripts/companies.txt` (one per line, no code change). The
+  pool is ~1,900 verified-live boards, so thin waves are much more likely to mean the
+  filters are too tight than that the pool is too small — check `--boards 1900` output
+  before hunting for new companies. A company missing from one platform is often on
+  another — try the same token on greenhouse/lever/ashby before concluding it's
+  unreachable. Dead tokens self-prune after 4 consecutive failures
+  (`data/board_rotation.csv`).
 
 ---
 

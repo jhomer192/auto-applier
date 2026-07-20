@@ -6,8 +6,8 @@ the brain re-mines its favourite five companies, so waves run dry on jobs alread
 applied.csv/seen.csv. This queries live ATS board APIs across a large pool of boards
 and *rotates* which ones it hits, so consecutive sessions see different companies.
 
-    python3 scripts/source.py                    # 30 fresh jobs from ~45 rotated boards
-    python3 scripts/source.py --n 60 --boards 90 # deeper backlog for a long wave
+    python3 scripts/source.py                     # 30 fresh jobs from 400 rotated boards
+    python3 scripts/source.py --n 60 --boards 900 # deeper backlog for a long wave
     python3 scripts/source.py --lane security    # only one lane's keywords
     python3 scripts/source.py --stats            # rotation state, no fetching
 
@@ -27,8 +27,8 @@ Default platforms are Greenhouse + Lever only — Ashby is Tier 3 HARD-AVOID per
 CLAUDE.md SITE ROUTING (blocks at submit regardless of IP), so sourcing it would fill
 a wave with applications that can never land. Pass --platforms to override.
 
-Pool lives in scripts/companies.txt (`platform:token`); scripts/companies_reserve.txt
-holds verified-live boards held back for when waves run thin. Add companies there.
+Pool lives in scripts/companies.txt (`platform:token`) — ~1,900 verified-live boards.
+Add companies there; never hardcode them here.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ import argparse
 import csv
 import json
 import random
+import re
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -161,7 +162,14 @@ EXCLUDE = (
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
     "counsel", "attorney", "paralegal", "legal", "nurse", "clinical", "physician",
     "pharmac", "cpa", "tax ", "audit", "accountant", "intern", "phd",
-    "expression of interest", "talent pool", "general application",  # pipelines, not reqs
+    # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
+    "expression of interest", "talent pool", "talent community", "general application",
+    "future opportunity", "join our",
+    # Roles gated on an ALREADY-ACTIVE clearance. profile.yaml records none, and a
+    # clearance takes months and a sponsoring employer — so these can't convert.
+    # Delete these four lines if Zach does in fact hold one.
+    "cleared", "clearance", "ts/sci", "polygraph",
+    "tier 3",  # escalation tier — tier 1/2 support stays in-lane
 )
 # Signals a posting is calibrated for zero experience — these get ranked up.
 EARLY_SIGNALS = (
@@ -179,6 +187,19 @@ NON_US = (
     "colombia", "apac", "latam", "philippines", "manila", "china", "beijing",
     "shanghai", "korea", "seoul", "taiwan", "hong kong", "dubai", "uae", "switzerland",
     "sweden", "stockholm", "denmark", "norway", "finland", "italy", "austria",
+    # Added 2026-07-19: "San Jose, Costa Rica" matched the Bay Area gate on a bare
+    # "san jose". Only unambiguous country names go here — no "georgia" (US state),
+    # "cambridge"/"manchester"/"birmingham" (US cities), which would cost real jobs.
+    "costa rica", "chile", "peru", "uruguay", "ecuador", "guatemala", "panama",
+    "bolivia", "paraguay", "venezuela", "nicaragua", "honduras", "el salvador",
+    "czech", "prague", "hungary", "budapest", "bulgaria", "serbia", "belgrade",
+    "croatia", "slovakia", "slovenia", "lithuania", "latvia", "estonia", "ukraine",
+    "belgium", "brussels", "luxembourg", "greece", "athens, gr", "cyprus", "malta",
+    "iceland", "turkey", "istanbul", "egypt", "south africa", "nigeria", "kenya",
+    "morocco", "malaysia", "kuala lumpur", "indonesia", "jakarta", "thailand",
+    "bangkok", "vietnam", "new zealand", "auckland", "pakistan", "bangladesh",
+    "sri lanka", "saudi", "qatar", "bahrain", "jordan", "lebanon", "armenia",
+    "scotland", "edinburgh", "glasgow", "wales", "belfast",
 )
 US_REMOTE = (
     "united states", "usa", "u.s.", "us-remote", "remote - us", "remote, us",
@@ -189,6 +210,27 @@ US_REMOTE = (
 # board means remote-in-the-UK. Caught 2026-07-19: three EU-board applies went out
 # (Nscale Operations UK Ltd among them) because the location string alone looked clean.
 FOREIGN_HOSTS = ("eu.greenhouse.io",)
+# Locations that name the country and nothing else — no city, so nothing to commute to.
+US_ONLY_LOCATIONS = frozenset({
+    "united states", "united states of america", "us", "usa", "u s", "u s a",
+    "us remote", "remote us", "remote united states", "united states remote",
+    "nationwide", "anywhere in the us", "anywhere in the united states",
+})
+
+
+def _squash(text: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace — for exact location compares."""
+    return " ".join("".join(c if c.isalnum() else " " for c in text).lower().split())
+
+
+_STATE_IN_TITLE = re.compile(r",\s*([A-Z]{2})\b")
+
+
+def _names_other_state(title: str) -> bool:
+    """True if the title pins the role to a non-California state, e.g.
+    "Outside Sales Representative - Portland, OR". Such postings are routinely filed
+    under a country-wide location, so the location string alone won't catch them."""
+    return any(s != "CA" for s in _STATE_IN_TITLE.findall(title))
 
 
 # --- pool + rotation state ---------------------------------------------------
@@ -290,10 +332,22 @@ def location_ok(location: str, title: str, url: str = "") -> bool:
     if any(h in url.lower() for h in FOREIGN_HOSTS):
         # Foreign board: the location has to name a US place itself. A bare "Remote"
         # is remote-in-that-country, and inheriting it is how the EU leak happened.
-        return is_bay_area(location) or any(x in location.lower() for x in US_REMOTE)
+        # This only ADDS a requirement — the normal Bay/remote-US rule below still has
+        # to pass. Returning True from here let an LA+NYC role through on the strength
+        # of "United States" alone, which the ordinary path would have rejected.
+        if not (is_bay_area(location) or any(x in location.lower() for x in US_REMOTE)):
+            return False
     if is_bay_area(location, title):
         return True
     if "remote" in blob and any(x in blob for x in US_REMOTE):
+        return True
+    # A location that is ONLY a country name ("United States", "USA") and names no
+    # city is a distributed role — treat it as remote-US even without the word
+    # "remote". Anything with a city attached ("Los Angeles, ..., United States")
+    # falls through to the rules above, which is what rejects office-bound roles.
+    # The title still gets a look: "Outside Sales Representative - Portland, OR" is
+    # posted with location "United States" but is plainly an Oregon territory role.
+    if _squash(location) in US_ONLY_LOCATIONS and not _names_other_state(title):
         return True
     return False
 
@@ -363,7 +417,9 @@ def fetch(board: tuple[str, str]) -> tuple[tuple[str, str], list[dict] | None]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Rotating live-board job sourcer.")
     ap.add_argument("--n", type=int, default=30, help="max jobs to print (default 30)")
-    ap.add_argument("--boards", type=int, default=45, help="boards to mine this run (default 45)")
+    # 400 boards is ~7s at 16 workers — mining is cheap, so breadth is nearly free.
+    # (32 workers is slower, not faster: the board APIs start rate-limiting.)
+    ap.add_argument("--boards", type=int, default=400, help="boards to mine this run (default 400)")
     ap.add_argument("--lane", choices=sorted(LANES), help="restrict to one lane")
     ap.add_argument("--platforms", default=",".join(DEFAULT_PLATFORMS),
                     help="comma-separated: greenhouse,lever[,ashby] — Ashby is Tier 3 "
