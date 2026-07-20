@@ -452,3 +452,27 @@ def test_ashby_is_off_by_default(sandbox, monkeypatch, capsys):
     monkeypatch.setattr(source, "_fetch_once", record)
     source.main(["source.py", "--boards", "5"])
     assert "ashby" not in seen
+
+
+@pytest.mark.parametrize("title", [
+    "(Work At Home) Data Entry - Remote - Administrative Assistant",
+    "Work From Home Data Entry Clerk",
+])
+def test_work_from_home_data_entry_spam(title):
+    """One fake posting cloned across dozens of small towns, and a personal-data
+    harvesting funnel. Found while yield-testing Breezy HR, 2026-07-19."""
+    assert classify(title, None) is None
+
+
+@pytest.mark.parametrize("location,title,expected", [
+    # "remote" in the TITLE plus any US city is not a remote-US role.
+    ("Oshkosh, United States", "Administrative Assistant - Remote", False),
+    ("Battle Mountain, United States", "Operations Coordinator (Remote)", False),
+    # The location itself says remote, or there is no location to contradict the title.
+    ("Remote - US", "Sales Development Representative", True),
+    ("Remote, United States", "Sales Development Representative", True),
+    ("United States", "Sales Development Representative", True),
+    ("", "Business Development Representative - US Remote", True),
+])
+def test_remote_must_come_from_the_location(location, title, expected):
+    assert location_ok(location, title, "https://boards.greenhouse.io/x/1") is expected

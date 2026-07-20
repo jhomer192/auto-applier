@@ -191,6 +191,7 @@ EXCLUDE = (
     "counsel", "attorney", "paralegal", "legal", "nurse", "clinical", "physician",
     "pharmac", "cpa", "tax ", "audit", "accountant", "phd",
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
+    "work at home", "work from home", "data entry",
     "expression of interest", "talent pool", "talent community", "general application",
     "future opportunity", "join our",
     # Geographic restriction spelled out in the title rather than the location, e.g.
@@ -454,7 +455,8 @@ def location_ok(location: str, title: str, url: str = "") -> bool:
             return False
     if is_bay_area(location, title):
         return True
-    if "remote" in blob and any(x in blob for x in US_REMOTE):
+    loc_l = location.lower()
+    if ("remote" in loc_l or not loc_l.strip()) and any(x in blob for x in US_REMOTE):
         return True
     # A location that is ONLY a country name ("United States", "USA") and names no
     # city is a distributed role — treat it as remote-US even without the word
