@@ -286,6 +286,16 @@ _STATE_CODES = frozenset(
 # ambiguous city names: rather than chase every Bay city with a namesake elsewhere
 # (Sunnyvale TX, Menlo Park NJ, Berkeley MO, Santa Clara UT, Mountain View AR,
 # Hayward WI, Alameda NM), disqualify on the state the posting actually names.
+# California, but not the Bay Area. A title naming one of these pins the role even
+# when the location is filed country-wide: "Outside Sales Representative - Central
+# Valley, CA" passed because the ", CA" satisfied the other-state check.
+_CA_NON_BAY = (
+    "central valley", "los angeles", "san diego", "sacramento", "orange county",
+    "inland empire", "fresno", "bakersfield", "irvine", "san luis obispo",
+    "santa barbara", "santa monica", "pasadena", "long beach", "anaheim",
+    "riverside", "stockton", "modesto", "chico", "redding", "socal",
+    "southern california", "central california",
+)
 _OTHER_STATES = (
     "alabama", "alaska", "arizona", "arkansas", "colorado", "connecticut", "delaware",
     "florida", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
@@ -320,6 +330,9 @@ def _names_other_state(title: str) -> bool:
     """True if the title pins the role to a non-California state, e.g.
     "Outside Sales Representative - Portland, OR". Such postings are routinely filed
     under a country-wide location, so the location string alone won't catch them."""
+    t = title.lower()
+    if any(c in t for c in _CA_NON_BAY) and not is_bay_area(title):
+        return True
     return any(s != "CA" and s in _STATE_CODES
                for s in _STATE_IN_TITLE.findall(title))
 

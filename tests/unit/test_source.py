@@ -510,3 +510,18 @@ def test_blocked_companies_are_not_even_fetched(sandbox, monkeypatch):
     source.main(["source.py", "--boards", "5"])
     assert "alpha" not in fetched
     assert "beta" in fetched
+
+
+@pytest.mark.parametrize("title,expected", [
+    # California, but not the Bay Area — the ", CA" satisfied the other-state check.
+    ("Outside Sales Representative - Central Valley, CA", False),
+    ("Sales Representative - Los Angeles, CA", False),
+    ("Account Development Rep - San Diego", False),
+    ("BDR - Sacramento", False),
+    # Bay Area named in the title still passes.
+    ("Sales Development Representative - San Francisco, CA", True),
+    ("Sales Development Representative", True),
+])
+def test_california_but_not_bay_area_in_title(title, expected):
+    assert location_ok("United States", title,
+                       "https://boards.greenhouse.io/x/1") is expected
