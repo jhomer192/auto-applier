@@ -525,3 +525,28 @@ def test_blocked_companies_are_not_even_fetched(sandbox, monkeypatch):
 def test_california_but_not_bay_area_in_title(title, expected):
     assert location_ok("United States", title,
                        "https://boards.greenhouse.io/x/1") is expected
+
+
+@pytest.mark.parametrize("location,expected", [
+    # Outer ring of the nine-county Bay Area — included on Jack's call, 2026-07-20.
+    ("Santa Rosa, CA", True), ("Napa, CA", True), ("Vallejo, California", True),
+    ("Fairfield, CA", True), ("Antioch, CA", True), ("Brentwood, CA", True),
+    ("Pittsburg, CA", True), ("Benicia, CA", True), ("Pacifica, CA", True),
+    ("El Cerrito, CA", True), ("Atherton, CA", True),
+    # ...and their better-known namesakes must still be rejected. "pittsburg" is a
+    # prefix of "Pittsburgh"; Fairfield/Antioch/Brentwood/Santa Rosa all exist elsewhere.
+    ("Pittsburgh, PA", False), ("Fairfield, CT", False), ("Antioch, TN", False),
+    ("Brentwood, TN", False), ("Santa Rosa, NM", False),
+])
+def test_outer_ring_bay_area(location, expected):
+    assert location_ok(location, "Sales Development Representative", "u") is expected
+
+
+@pytest.mark.parametrize("title", [
+    "Fraud Investigator", "Investigations Analyst", "Loss Prevention Specialist",
+    "Background Screening Specialist", "Financial Crime Analyst", "Sanctions Analyst",
+    "AML Investigator", "Physical Security Specialist",
+])
+def test_investigations_lane(title):
+    """His degree is criminology; these titles previously matched no lane at all."""
+    assert classify(title, None) == "security"

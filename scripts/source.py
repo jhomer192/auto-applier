@@ -76,6 +76,13 @@ BAY_TERMS = (
     "orinda", "albany, ca",
     "marin county", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
     "larkspur", "tiburon", "petaluma",
+    # Outer ring of the nine-county Bay Area (Jack, 2026-07-20). Names unique to CA go
+    # in bare; ones with well-known namesakes are qualified — "pittsburg" is a prefix of
+    # "Pittsburgh, PA", Fairfield exists in CT/NJ/OH/IA, Antioch in TN/IL, Brentwood in
+    # TN/NY and in Los Angeles, Hillsborough in NC/NJ.
+    "santa rosa", "napa", "vallejo", "benicia", "pacifica", "el cerrito", "pinole",
+    "atherton", "fairfield, ca", "antioch, ca", "brentwood, ca", "pittsburg, ca",
+    "hillsborough, ca",
 )
 
 
@@ -118,6 +125,10 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         # comma is how Everlaw writes a literal GRC Analyst req.
         "safeguards", "enforcement analyst", "content moderat", "abuse",
         "governance, risk", "grc analyst",
+        # Investigations — his degree is criminology, and these titles matched nothing.
+        "investigator", "investigations", "loss prevention", "background screen",
+        "due diligence", "sanctions", "anti-money laundering", "financial crime",
+        "case investigator", "claims investigator", "physical security",
     )),
     "sdr": (1, (
         "sales development", "business development representative", "bdr", "sdr",

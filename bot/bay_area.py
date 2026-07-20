@@ -49,6 +49,13 @@ _BAY_TERMS: set[str] = {
     # North Bay / Marin
     "marin county", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
     "larkspur", "tiburon", "petaluma",
+    # Outer ring of the nine-county Bay Area (Jack, 2026-07-20). Names unique to CA go
+    # in bare; ones with well-known namesakes are qualified — "pittsburg" is a prefix of
+    # "Pittsburgh, PA", Fairfield exists in CT/NJ/OH/IA, Antioch in TN/IL, Brentwood in
+    # TN/NY and in Los Angeles, Hillsborough in NC/NJ.
+    "santa rosa", "napa", "vallejo", "benicia", "pacifica", "el cerrito", "pinole",
+    "atherton", "fairfield, ca", "antioch, ca", "brentwood, ca", "pittsburg, ca",
+    "hillsborough, ca",
 }
 
 # California-but-NOT-Bay-Area cities that could otherwise sneak past a loose "CA"
@@ -58,6 +65,37 @@ _CA_NON_BAY = {
     "los angeles", "san diego", "sacramento", "irvine", "san luis obispo",
     "santa barbara", "santa monica", "pasadena", "fresno", "long beach",
 }
+
+
+_STATE_CODE_RE = re.compile(r",\s*([A-Z]{2})\b")
+_CA_CODE_RE = re.compile(r",\s*CA\b")
+_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DC DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+    "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY".split()
+)
+_OTHER_STATE_NAMES = (
+    "alabama", "alaska", "arizona", "arkansas", "colorado", "connecticut", "delaware",
+    "florida", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
+    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
+    "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming",
+)
+
+
+def _other_state_only(text: str) -> bool:
+    """True if the text names a non-CA state and never California. Mirrors
+    scripts/source.py — without it, bare city names match their namesakes
+    ("Santa Rosa, NM", "Berkeley Heights, NJ", "Pittsburgh, PA")."""
+    if not text:
+        return False
+    low = text.lower()
+    if "california" in low or _CA_CODE_RE.search(text):
+        return False
+    codes = {c for c in _STATE_CODE_RE.findall(text) if c in _STATE_CODES and c != "CA"}
+    return bool(codes) or any(s in low for s in _OTHER_STATE_NAMES)
 
 
 def is_bay_area(*texts: str) -> bool:
@@ -70,6 +108,8 @@ def is_bay_area(*texts: str) -> bool:
     if not blob.strip():
         return False
     if any(term in blob for term in _NON_US):
+        return False
+    if _other_state_only(" ".join(t for t in texts if t)):
         return False
     return any(term in blob for term in _BAY_TERMS)
 
