@@ -197,7 +197,7 @@ python3 scripts/skipped.py check "$COMPANY"    # MATCH → stop
 #     Risk/AML/Compliance · HR/People/Recruiting · Ops/Admin · CS/Support · Data/Biz
 #     Analyst · Content/Comms/Marketing) and passes the HARD FIT FILTER above
 #   - remote or remote-friendly · US-friendly · no sponsorship required
-#   - platform is Greenhouse / Lever / non-Turnstile Workable (frictionless, direct apply)
+#   - platform is Greenhouse / Lever (frictionless), or Workable (one attempt, Tier 1.5)
 #   Only ask Jack when a role is genuinely ambiguous (borderline seniority / unclear lane).
 #   Otherwise just apply. NEVER use LinkedIn Easy Apply when a direct apply exists.
 
@@ -313,23 +313,32 @@ handled them. Never send email yourself — items are for Jack to act on.
 Goal: maximize the share of applies that land on platforms that DON'T block, and stop
 burning turns on ones that do. HARD LESSON (2026-07-18, from real retry.csv data): the
 residential tunnel fixes IP *reputation* ONLY. It does NOT beat Cloudflare Turnstile /
-bot-fingerprint at submit time. Ashby, SmartRecruiters, and Turnstile-guarded Workable
-forms block the SUBMIT even on the residential AT&T IP ("residential AT&T IP also blocked",
+bot-fingerprint at submit time. Ashby and SmartRecruiters block the SUBMIT even on the
+residential AT&T IP, as do the Workable submits that Turnstile does challenge ("residential AT&T IP also blocked",
 "residential IP also stuck in Submitting state"). The tunnel helps Lever + clean page-loads,
 NOT the Turnstile boards. Route by what actually CONVERTS:
 
 TIER 1 — CONVERTS, always try first: Greenhouse (job-boards.greenhouse.io) and Lever
-  (jobs.lever.co), plus Workable forms that do NOT show a Turnstile widget. Direct-apply,
-  no login wall, no captcha. Essentially all successful submits happen here — spend your
-  turns here.
+  (jobs.lever.co). Direct-apply, no login wall, no captcha. Essentially all successful
+  submits happen here — spend your turns here.
+TIER 1.5 — WORKABLE (apply.workable.com): try it, but judge it at SUBMIT, not on sight.
+  Do NOT decide by looking for a Turnstile widget. Checked 2026-07-19: four unrelated
+  Workable accounts all served the SAME Turnstile site key, so Turnstile is a
+  platform-wide default rather than a per-customer opt-in — "this one has no widget"
+  is not a signal you can read. Some Workable submits still go through, which fits
+  managed Turnstile passing invisibly for a clean browser session. So: fill it, submit
+  once, and let the outcome decide. If it submits, great. If it hangs in "Submitting"
+  or bounces, that company goes in `data/blocklist.txt` and you move on immediately —
+  do NOT retry it and do NOT `retry.py mark` it. Never spend a second attempt.
 TIER 2 — none. There is no "works only via residential" tier: the tunnel unblocks no submit
   that Tier 1 can't already do. Lever is Tier 1 regardless of `proxy_status`.
 TIER 3 — HARD-AVOID (do NOT spend turns; ~0 successful submits ever): Ashby
-  (jobs.ashbyhq.com), SmartRecruiters, ANY Turnstile-guarded form (Workable-with-Turnstile,
-  Cloudflare custom portals), Workday / myworkdayjobs, iCIMS, Taleo, BrassRing. Turnstile
-  boards block at submit regardless of IP; the rest are login-walled / multi-page /
-  bot-hostile. Only touch one if the SAME role has NO Tier-1 posting. NEVER grind these and
-  NEVER `retry.py mark` them — a Turnstile block is permanent for us, not transient.
+  (jobs.ashbyhq.com), SmartRecruiters, Cloudflare custom portals, Workday /
+  myworkdayjobs, iCIMS, Taleo, BrassRing. These block at submit regardless of IP, or are
+  login-walled / multi-page / bot-hostile. (Workable is no longer listed here — it is
+  Tier 1.5 above: attempted once, then blocklisted per company on a real failure.)
+  Only touch one if the SAME role has NO Tier-1 posting. NEVER grind these and NEVER
+  `retry.py mark` them — a Turnstile block is permanent for us, not transient.
 
 LEARN blockers: if a submit is blocked even with `proxy_status`=`up` (so it's NOT the IP),
 append one line to `data/blocklist.txt` as `<ats_host>\t<company>\t<reason>` and thereafter
@@ -342,7 +351,8 @@ Ashby and Lever have repeatedly hCaptcha/Cloudflare-blocked this VPS's IP across
 companies (Hive — lost an entire 11-job batch, Anchorage, BIS, Airwallex, Pulse, Tavrn.ai,
 Vanta, Baseten; GGRC's Workable form hit Cloudflare Turnstile once too). These blocks have
 produced zero successful submissions despite repeated attempts. **Ashby = HARD-AVOID always (Turnstile blocks the submit even on residential — see SITE ROUTING above). Lever = Tier 1, fine always. Each wave:**
-try Greenhouse, Workable, SmartRecruiters, and direct company-board browsing FIRST each wave.
+start every wave with `scripts/source.py` (Greenhouse + Lever), then Workable and direct
+company-board browsing. NOT SmartRecruiters — it is Tier 3 HARD-AVOID per SITE ROUTING.
 If an Ashby/Lever hCaptcha appears, take the one allowed attempt (per the existing
 Blocked-page rule), `retry.py mark` it (NOT seen — it is still live), and don't burn a
 second attempt on that platform this wave.
@@ -365,7 +375,8 @@ hydration before), and do NOT change `.mcp.json` yourself.
 which health-checks a reverse SOCKS tunnel on `127.0.0.1:1080` and chooses:
   - tunnel UP   -> egress through Jack's home **residential AT&T IP (Palo Alto, AS7018)**,
     which fixes IP *reputation* (helps Lever + clean page-loads). It does NOT beat Cloudflare
-    Turnstile at submit: Ashby/SmartRecruiters/Turnstile-Workable still block residential
+    Turnstile at submit: Ashby/SmartRecruiters still block residential, as do the
+    Workable submits that get challenged
     (proven 2026-07-18) -- those are Tier 3 HARD-AVOID, not tunnel-fixable;
   - tunnel DOWN -> **direct, no proxy** (raw Hetzner IP) so an apply NEVER hard-fails.
 The wrapper writes the live state to `data/proxy_status` (`up`/`down`). Do NOT hardcode
