@@ -23,9 +23,9 @@
 # productivity weighting in pick_boards(), which demotes them after 3 fruitless mines
 # without ever dropping them.
 #
-# Pool: 1990 boards (1499 greenhouse, 385 lever, 106 ashby).
+# Pool: 2111 boards (1562 greenhouse, 443 lever, 106 ashby).
 
-# ---- GREENHOUSE — Tier 1 (1499) ---------------------------------
+# ---- GREENHOUSE — Tier 1 (1562) ---------------------------------
 greenhouse:2u
 greenhouse:3cloud
 greenhouse:541
@@ -35,10 +35,12 @@ greenhouse:abacus
 greenhouse:abarca
 greenhouse:abbyy
 greenhouse:abinbev
+greenhouse:able
 greenhouse:abnormalsecurity
 greenhouse:accelerationpartners
 greenhouse:accenturefederalservices
 greenhouse:accuweather
+greenhouse:aclu
 greenhouse:acluinternships
 greenhouse:acquia
 greenhouse:acutechgroupinc
@@ -63,11 +65,13 @@ greenhouse:airship
 greenhouse:airspace
 greenhouse:airtable
 greenhouse:airup
+greenhouse:akidolabs
 greenhouse:akoya
 greenhouse:akqa
 greenhouse:aksia
 greenhouse:akuity
 greenhouse:alarmcom
+greenhouse:albedo
 greenhouse:alertmedia
 greenhouse:alethea
 greenhouse:algolia
@@ -90,10 +94,12 @@ greenhouse:amplemarket
 greenhouse:amplitude
 greenhouse:amwell
 greenhouse:anaplan
+greenhouse:ansabiotechnologies
 greenhouse:antenna
 greenhouse:anteriad
 greenhouse:anthropic
 greenhouse:anydesk
+greenhouse:aon3d
 greenhouse:apaleo
 greenhouse:apex
 greenhouse:apolloio
@@ -116,6 +122,7 @@ greenhouse:archera
 greenhouse:arcoeducacao
 greenhouse:arine
 greenhouse:arizeai
+greenhouse:ark
 greenhouse:armada
 greenhouse:armissecurity
 greenhouse:armorcode
@@ -125,13 +132,16 @@ greenhouse:arvinas
 greenhouse:arxroboticsgmbh
 greenhouse:asana
 greenhouse:asm
+greenhouse:assemblyai
 greenhouse:asteralabs
 greenhouse:astranis
 greenhouse:atariinc
 greenhouse:athena
+greenhouse:athinkingape
 greenhouse:atlassand
 greenhouse:atolls
 greenhouse:atomicwork
+greenhouse:attain
 greenhouse:attentive
 greenhouse:audibenehearcom
 greenhouse:augury
@@ -180,6 +190,7 @@ greenhouse:betterment
 greenhouse:beyondtrust
 greenhouse:bigid
 greenhouse:billcom
+greenhouse:billiontoone
 greenhouse:biohub
 greenhouse:bioptimus8
 greenhouse:bird
@@ -237,17 +248,20 @@ greenhouse:cabify
 greenhouse:calendly
 greenhouse:callrail
 greenhouse:calm
+greenhouse:camp
 greenhouse:candid
 greenhouse:canonical
 greenhouse:canto
 greenhouse:capco
 greenhouse:capitalize
 greenhouse:carbon
+greenhouse:carbonchain
 greenhouse:carbonrobotics
 greenhouse:careersday
 greenhouse:cargurus
 greenhouse:caribou
 greenhouse:caronsale
+greenhouse:carrotfertility
 greenhouse:carta
 greenhouse:carvana
 greenhouse:castaigroupinc
@@ -269,6 +283,7 @@ greenhouse:charliehealth
 greenhouse:charnetwork
 greenhouse:checkbook
 greenhouse:checkr
+greenhouse:cheddar
 greenhouse:chicory
 greenhouse:chime
 greenhouse:chowbus
@@ -342,6 +357,7 @@ greenhouse:crossnokaye
 greenhouse:crowdstreet
 greenhouse:crunchyroll
 greenhouse:cultureamp
+greenhouse:culturebiosciences
 greenhouse:curative
 greenhouse:current
 greenhouse:customerio
@@ -359,6 +375,7 @@ greenhouse:datagrail
 greenhouse:dataiku
 greenhouse:dataikujobs
 greenhouse:datavations
+greenhouse:daybreakhealth
 greenhouse:daylight
 greenhouse:debutbiotech25
 greenhouse:decathlontechnology
@@ -396,6 +413,7 @@ greenhouse:doordashinternational
 greenhouse:doordashusa
 greenhouse:doppel
 greenhouse:dotmatics
+greenhouse:dots
 greenhouse:doubleverify
 greenhouse:doximity
 greenhouse:dragos
@@ -414,6 +432,7 @@ greenhouse:easygo
 greenhouse:easyship
 greenhouse:ebanx
 greenhouse:ebury
+greenhouse:echo
 greenhouse:ecoworks
 greenhouse:edgeconnex
 greenhouse:edged_global
@@ -426,6 +445,7 @@ greenhouse:elend
 greenhouse:elite
 greenhouse:elitetechnology
 greenhouse:elsevier
+greenhouse:embrace
 greenhouse:emnify
 greenhouse:enboarder
 greenhouse:enchargeai36
@@ -437,6 +457,7 @@ greenhouse:enova
 greenhouse:ensemble
 greenhouse:entera
 greenhouse:entersekt
+greenhouse:enveritas
 greenhouse:eonio
 greenhouse:eositsolutions
 greenhouse:epicgames
@@ -472,6 +493,7 @@ greenhouse:fanaticscollectibles
 greenhouse:fanduel
 greenhouse:fastly
 greenhouse:fastspring
+greenhouse:feanixbiotechnologies
 greenhouse:federato
 greenhouse:feedzai
 greenhouse:feinternational
@@ -507,6 +529,7 @@ greenhouse:flohealth
 greenhouse:flourish
 greenhouse:flowtraders
 greenhouse:fluxon
+greenhouse:focalsystems
 greenhouse:focusfinancialpartners
 greenhouse:forgeglobal
 greenhouse:formic
@@ -536,6 +559,7 @@ greenhouse:gemini
 greenhouse:genea
 greenhouse:generalassembly
 greenhouse:generalatlantic
+greenhouse:generalproximity
 greenhouse:genevatrading
 greenhouse:geniussports
 greenhouse:genscript
@@ -555,6 +579,7 @@ greenhouse:glossgenius
 greenhouse:glossier
 greenhouse:glydways
 greenhouse:go1au
+greenhouse:goatgroup
 greenhouse:gocardless
 greenhouse:godaddy
 greenhouse:goguardian
@@ -577,9 +602,11 @@ greenhouse:greenhouse
 greenhouse:greenplaces
 greenhouse:gremlin
 greenhouse:grey
+greenhouse:grin
 greenhouse:groupon
 greenhouse:grover
 greenhouse:growe
+greenhouse:groww
 greenhouse:gruve
 greenhouse:guardsquare
 greenhouse:guidepoint
@@ -604,6 +631,7 @@ greenhouse:headoutcareers
 greenhouse:headoutlinkedin
 greenhouse:healthjoy
 greenhouse:healthverity
+greenhouse:heartaerospace
 greenhouse:hellofresh
 greenhouse:help
 greenhouse:helsing
@@ -628,9 +656,11 @@ greenhouse:housecall
 greenhouse:housinganywhere
 greenhouse:hover
 greenhouse:hs
+greenhouse:hubblenetwork
 greenhouse:hubspotjobs
 greenhouse:hudl
 greenhouse:hugeinc
+greenhouse:humaninterest
 greenhouse:humanrightswatch
 greenhouse:humansignal
 greenhouse:humeai
@@ -638,6 +668,7 @@ greenhouse:huntress
 greenhouse:hut8
 greenhouse:hyperproof
 greenhouse:hyphenconnect
+greenhouse:icarus
 greenhouse:icgmedical
 greenhouse:iconiq
 greenhouse:ideo
@@ -681,6 +712,7 @@ greenhouse:interworks
 greenhouse:inthepocket
 greenhouse:intradiem
 greenhouse:intrinsicrobotics
+greenhouse:inversionspace
 greenhouse:invisible
 greenhouse:invisibletech
 greenhouse:invoca
@@ -795,6 +827,7 @@ greenhouse:lotlinx
 greenhouse:lovable
 greenhouse:ltse
 greenhouse:lucanetgroup
+greenhouse:lucidbots
 greenhouse:lucidmotors
 greenhouse:lucidsoftware
 greenhouse:lumimeds
@@ -805,10 +838,12 @@ greenhouse:magnolia
 greenhouse:make
 greenhouse:mangroup
 greenhouse:manifest
+greenhouse:mantis
 greenhouse:map
 greenhouse:mark43
 greenhouse:markforged
 greenhouse:marqeta
+greenhouse:marqvision
 greenhouse:masterclass
 greenhouse:mastercontrol
 greenhouse:matic
@@ -816,6 +851,7 @@ greenhouse:mattermost
 greenhouse:mavenclinic
 greenhouse:maxwell
 greenhouse:maybellquantum
+greenhouse:maymobility
 greenhouse:mbarecruitingcra
 greenhouse:mcafee
 greenhouse:medelitellc
@@ -826,6 +862,7 @@ greenhouse:mentimeter
 greenhouse:mercari
 greenhouse:merceradvisors
 greenhouse:mercury
+greenhouse:meruhealth
 greenhouse:mesh
 greenhouse:metalab
 greenhouse:metropolis
@@ -849,6 +886,7 @@ greenhouse:moduscreate
 greenhouse:moia
 greenhouse:mojio
 greenhouse:moloco
+greenhouse:momentic
 greenhouse:momentus
 greenhouse:mongodb
 greenhouse:monks
@@ -870,6 +908,7 @@ greenhouse:nansen
 greenhouse:narvar
 greenhouse:nasuni
 greenhouse:natera
+greenhouse:navierai
 greenhouse:navvis
 greenhouse:nayya
 greenhouse:nearai
@@ -887,6 +926,7 @@ greenhouse:newrelic
 greenhouse:newsbreak
 greenhouse:newsela
 greenhouse:newton
+greenhouse:nex
 greenhouse:nexhealth
 greenhouse:nexla
 greenhouse:nextdoor
@@ -898,12 +938,15 @@ greenhouse:nift
 greenhouse:ninjatrader
 greenhouse:nintendo
 greenhouse:nintex
+greenhouse:niraenergy
 greenhouse:nlcventures
 greenhouse:nmi
+greenhouse:noble
 greenhouse:nooks
 greenhouse:northbeam
 greenhouse:northpointtechnology
 greenhouse:northspyre
+greenhouse:novacredit
 greenhouse:nozominetworks
 greenhouse:nscaleoperationsukltd
 greenhouse:ntconcepts
@@ -926,6 +969,7 @@ greenhouse:odeko
 greenhouse:offerup
 greenhouse:ogilvy
 greenhouse:ohio
+greenhouse:oklo
 greenhouse:okta
 greenhouse:okx
 greenhouse:oliver
@@ -947,6 +991,7 @@ greenhouse:openly
 greenhouse:openspace
 greenhouse:opentable
 greenhouse:openweb
+greenhouse:openwork
 greenhouse:ophelia
 greenhouse:oportun
 greenhouse:opswat
@@ -1033,6 +1078,7 @@ greenhouse:poppulo
 greenhouse:portwest
 greenhouse:postman
 greenhouse:postscript
+greenhouse:powerx
 greenhouse:pqshield
 greenhouse:practicebetter
 greenhouse:praxent
@@ -1051,7 +1097,9 @@ greenhouse:prodigal
 greenhouse:profound
 greenhouse:project44
 greenhouse:prolific
+greenhouse:pronto
 greenhouse:proof
+greenhouse:prospa
 greenhouse:protagonist
 greenhouse:proton
 greenhouse:prove
@@ -1063,6 +1111,7 @@ greenhouse:pubnub
 greenhouse:pulley
 greenhouse:pulse
 greenhouse:purestorage
+greenhouse:pursuit
 greenhouse:putnamassociatesllc
 greenhouse:pvminc
 greenhouse:qgenda
@@ -1095,6 +1144,7 @@ greenhouse:realtimeboardglobal
 greenhouse:rebag
 greenhouse:recall
 greenhouse:recast
+greenhouse:recidiviz
 greenhouse:recordedfuture
 greenhouse:redapt
 greenhouse:redcircle
@@ -1102,12 +1152,15 @@ greenhouse:reddit
 greenhouse:redwoodsoftware
 greenhouse:referralsuseonly
 greenhouse:refeyn
+greenhouse:reflex
 greenhouse:reformation
 greenhouse:refurbed
+greenhouse:regent
 greenhouse:regscale
 greenhouse:relativity
 greenhouse:released
 greenhouse:relex
+greenhouse:remedy
 greenhouse:remesh
 greenhouse:remote
 greenhouse:remotecom
@@ -1118,6 +1171,7 @@ greenhouse:reolink
 greenhouse:resortpass
 greenhouse:retailnext
 greenhouse:rethink
+greenhouse:retrofit
 greenhouse:revel
 greenhouse:revolutionmedicines
 greenhouse:rga
@@ -1178,6 +1232,7 @@ greenhouse:securityscorecard
 greenhouse:seed
 greenhouse:seer
 greenhouse:selffinancial
+greenhouse:send
 greenhouse:sendbird
 greenhouse:sendcloud
 greenhouse:sensei
@@ -1188,6 +1243,7 @@ greenhouse:setpoint
 greenhouse:seurat
 greenhouse:seyond
 greenhouse:sezzle
+greenhouse:sfox
 greenhouse:shadow
 greenhouse:shakepay
 greenhouse:sharebite
@@ -1212,6 +1268,7 @@ greenhouse:simplisafe
 greenhouse:simscale
 greenhouse:simtrabps
 greenhouse:singlestore
+greenhouse:sirum
 greenhouse:sisense
 greenhouse:sixfold
 greenhouse:sixgeninc
@@ -1272,7 +1329,9 @@ greenhouse:stackadapt
 greenhouse:stackblitz
 greenhouse:stackline
 greenhouse:staffbase
+greenhouse:stage
 greenhouse:starburst
+greenhouse:starcloud
 greenhouse:starrez
 greenhouse:stelo
 greenhouse:stepstone
@@ -1302,6 +1361,7 @@ greenhouse:sunset
 greenhouse:super
 greenhouse:superchat
 greenhouse:superior
+greenhouse:superset
 greenhouse:supplyhouse
 greenhouse:sustainment
 greenhouse:swayable
@@ -1416,6 +1476,7 @@ greenhouse:ultratendency
 greenhouse:unanet
 greenhouse:unbounce
 greenhouse:underdogfantasy
+greenhouse:understoodcare
 greenhouse:unframe
 greenhouse:universalaudio
 greenhouse:unlock
@@ -1470,6 +1531,7 @@ greenhouse:wekatest
 greenhouse:wellthy
 greenhouse:weploy
 greenhouse:whalarinc
+greenhouse:whitespace
 greenhouse:wikimedia
 greenhouse:wildlifestudios
 greenhouse:wing
@@ -1513,6 +1575,7 @@ greenhouse:zencoder
 greenhouse:zenoti
 greenhouse:zenput
 greenhouse:zenrows
+greenhouse:zerocater
 greenhouse:zetaglobal
 greenhouse:zinnia
 greenhouse:ziprecruiter
@@ -1526,7 +1589,7 @@ greenhouse:zuora
 greenhouse:zupinnovation
 greenhouse:zwift
 
-# ---- LEVER — Tier 1 (385) --------------------------------------
+# ---- LEVER — Tier 1 (443) --------------------------------------
 lever:15five
 lever:21hhs
 lever:32Co
@@ -1544,6 +1607,7 @@ lever:aircall
 lever:airslate
 lever:aisle_and_abroad
 lever:aledade
+lever:aleph
 lever:alimentiv-2
 lever:alloy
 lever:alluxio
@@ -1586,9 +1650,13 @@ lever:bhhc
 lever:bhvr
 lever:binance
 lever:biointellisense
+lever:biorender
+lever:bloom
+lever:blue
 lever:bluebottlecoffee
 lever:bluecatnetworks
 lever:bluelightconsulting
+lever:bolster
 lever:bosonai
 lever:boxlunch
 lever:bpmcpa
@@ -1604,7 +1672,9 @@ lever:canvasmedical
 lever:capitalsolutionsgroup
 lever:capricor
 lever:capstan-medical
+lever:captivateiq
 lever:carbonhealth
+lever:caremessage
 lever:cbtnuggets
 lever:cellares
 lever:centuria
@@ -1617,12 +1687,14 @@ lever:cimgroup
 lever:clearcapital
 lever:clearedge
 lever:cobaltrobotics
+lever:Cofactr
 lever:colibrigroup
 lever:collate
 lever:CollectlyInc
 lever:contentsquare
 lever:convergentresearch
 lever:conversica
+lever:copia
 lever:copilotkit
 lever:copper-company
 lever:corebts
@@ -1631,6 +1703,7 @@ lever:court-avenue
 lever:crosslaketech
 lever:crypto
 lever:cscgeneration-2
+lever:culdesac
 lever:curio.gg
 lever:cyderes
 lever:cyngn
@@ -1646,17 +1719,24 @@ lever:distro
 lever:dlocal
 lever:dnb
 lever:dollskill
+lever:doola
 lever:doxel
 lever:dozee
 lever:drivetrain
 lever:dronedeploy
+lever:duffel
 lever:dwolla
 lever:elfbeauty
 lever:emburse
+lever:emilabs
 lever:epoch-ai
+lever:epsilon3
 lever:espace
+lever:eternal
 lever:evry-health
+lever:fampay
 lever:far-ai
+lever:Farcast
 lever:farfetch
 lever:field-ai
 lever:fieldnation
@@ -1666,10 +1746,12 @@ lever:findem
 lever:findigs
 lever:finix
 lever:finquery
+lever:fintual
 lever:fireflyon
 lever:fireworkhq
 lever:firstent
 lever:fiscalnote
+lever:fleetzero
 lever:Flex
 lever:Fliff
 lever:floqast
@@ -1685,6 +1767,7 @@ lever:geocomply-2
 lever:getmaple
 lever:getsquire
 lever:getwingapp
+lever:glide
 lever:gohighlevel
 lever:gomaterials
 lever:goodeggs
@@ -1693,6 +1776,9 @@ lever:gopuff
 lever:grailbio
 lever:greenlight
 lever:Grid
+lever:gridware
+lever:h1
+lever:handoff
 lever:happyco
 lever:harmony
 lever:heartbeathealth
@@ -1702,12 +1788,14 @@ lever:Hivemapper
 lever:hmbl-tech
 lever:hopeservices
 lever:Huckleberrylabs
+lever:hush
 lever:ifm-us
 lever:immuta
 lever:includedhealth
 lever:infinit
 lever:influur
 lever:inkitt
+lever:Instrumentl
 lever:intersect
 lever:jamcity
 lever:JetBridge
@@ -1715,10 +1803,12 @@ lever:jitxinc
 lever:jobgether
 lever:jobvite
 lever:jumpcloud
+lever:jupe
 lever:kabam
 lever:kariusdx
 lever:kepler
 lever:Ketch
+lever:kinter
 lever:klearnow
 lever:kpaonline
 lever:kpler
@@ -1727,10 +1817,12 @@ lever:landmarkbio
 lever:larian
 lever:latitudeinc
 lever:launchsquad
+lever:layup
 lever:lendbuzz
 lever:levelai
 lever:lifeforce
 lever:lingarogroup
+lever:livingcarbon
 lever:loadsmart
 lever:lodgify
 lever:loftorbital
@@ -1746,10 +1838,13 @@ lever:MachinaLabs
 lever:magnetforensics
 lever:mainspringenergy
 lever:mantisinnovation
+lever:marqvision
 lever:mashgin
 lever:matchgroup
 lever:matillion
+lever:maverickx
 lever:mcgovern
+lever:meesho
 lever:megaport
 lever:merlinlabs
 lever:metabase
@@ -1758,11 +1853,13 @@ lever:modeln
 lever:moonpay
 lever:multiplylabs
 lever:mythic-ai.com
+lever:mytos
 lever:neon
 lever:netomi
 lever:neuron7
 lever:nextech
 lever:nimblerx
+lever:nimbus
 lever:nium
 lever:Nomagic
 lever:novara
@@ -1781,22 +1878,28 @@ lever:payjoy
 lever:penumbrainc
 lever:people-ai
 lever:petvisor
+lever:picktrace
 lever:pigment
 lever:pingwind
 lever:pivotal
 lever:pivotenergy
 lever:plaid
 lever:plenti
+lever:plexus
 lever:plus-2
 lever:pmaconsultants
 lever:pointclickcare
+lever:polleverywhere
 lever:portcast
+lever:porter
+lever:postera
 lever:primee
 lever:profoundresearch
 lever:prolific-machines
 lever:proper
 lever:prosper
 lever:pushpress
+lever:pyka
 lever:qonto
 lever:quadlock
 lever:quantcast
@@ -1811,6 +1914,7 @@ lever:repurposeglobal
 lever:restaurant365
 lever:retro
 lever:reveneer
+lever:revi
 lever:rezotx
 lever:rfa-2
 lever:rideonewheel
@@ -1828,11 +1932,14 @@ lever:shakudo
 lever:shieldai
 lever:shiru
 lever:sideinc
+lever:sila
 lever:SimbeRobotics
 lever:sitetracker
 lever:skillerszone
 lever:skio
+lever:skyways
 lever:smart-working-solutions
+lever:smartcuts
 lever:smartenergy
 lever:snaplogic
 lever:snappr
@@ -1843,26 +1950,35 @@ lever:sonatype
 lever:sophos
 lever:spmb
 lever:spreetail
+lever:starkbank
 lever:startengine
 lever:steerbridge
 lever:suger
 lever:superannotate
+lever:superside
 lever:sure
 lever:swingdev
+lever:synapticure
 lever:synthego
 lever:tahoebio-ai
 lever:tala
 lever:teleo
+lever:tendo
+lever:Termius
+lever:theathletic
 lever:theblacktux
 lever:thebouqs.com
 lever:theinformationlab
 lever:thinkahead
 lever:thuma
+lever:thunkable
 lever:tildei
+lever:toku
 lever:tonic
 lever:toptal
 lever:tovala
 lever:tracktik
+lever:tractian
 lever:trellis
 lever:trendyol
 lever:tri
@@ -1875,13 +1991,16 @@ lever:turgon-ai
 lever:tusker
 lever:tutorintelligence
 lever:twingate
+lever:twodots
 lever:ullico
+lever:unify
 lever:unusual
 lever:upguard
 lever:uvcyber
 lever:veeva
 lever:velo3d
 lever:venteur
+lever:verifiable
 lever:verygoodsecurity
 lever:viaseparations
 lever:voleon
@@ -1903,6 +2022,7 @@ lever:wpromote
 lever:wra-ca
 lever:wtads
 lever:wyetechllc
+lever:Yassir
 lever:yuno
 lever:z1tech
 lever:zaimler
@@ -1911,6 +2031,7 @@ lever:zensurance
 lever:zerohomes
 lever:zeta
 lever:zilliz
+lever:zippi
 lever:zoox
 
 # ---- ASHBY — Tier 3 HARD-AVOID, opt-in via --platforms only (106) 

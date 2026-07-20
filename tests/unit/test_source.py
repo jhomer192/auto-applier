@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
+import source  # noqa: E402
 from source import classify, is_bay_area, location_ok  # noqa: E402
 
 # Titles the brain opened and rejected on 2026-07-19. Should never reach it again.
@@ -200,3 +201,45 @@ def test_state_named_in_title(title, expected):
 )
 def test_location_gate(location, title, expected):
     assert location_ok(location, title, "https://boards.greenhouse.io/x/jobs/1") is expected
+
+
+# --- fetch status classification ---------------------------------------------
+# Greenhouse returns 406 when throttling. On 2026-07-19 a burst of requests made 63
+# healthy boards 406 at once; every one answered 200 minutes later. If those count as
+# failures, four such episodes silently prune the board from the pool forever — the
+# opposite of the "widen the pool" work these boards exist for.
+
+def _http_error(code):
+    import urllib.error
+    def raiser(platform, token):
+        raise urllib.error.HTTPError("http://x", code, "boom", {}, None)
+    return raiser
+
+
+def test_404_is_missing_and_counts_toward_pruning(monkeypatch):
+    monkeypatch.setattr(source, "_fetch_once", _http_error(404))
+    _board, postings, status = source.fetch(("greenhouse", "gone"))
+    assert (postings, status) == (None, "missing")
+
+
+@pytest.mark.parametrize("code", [406, 429, 500, 503])
+def test_throttling_is_not_a_board_failure(monkeypatch, code):
+    monkeypatch.setattr(source, "_fetch_once", _http_error(code))
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)  # don't back off in tests
+    _board, postings, status = source.fetch(("greenhouse", "healthy"))
+    assert (postings, status) == (None, "throttled")
+
+
+def test_transient_error_retries_once_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(platform, token):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("first attempt times out")
+        return [{"title": "SDR", "location": "San Francisco, CA", "url": "u"}]
+
+    monkeypatch.setattr(source, "_fetch_once", flaky)
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    _board, postings, status = source.fetch(("lever", "flaky"))
+    assert status == "ok" and len(postings) == 1 and calls["n"] == 2

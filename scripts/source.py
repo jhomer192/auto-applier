@@ -21,7 +21,9 @@ longest-unmined boards are the likeliest picks, boards that have produced a matc
 job get a boost, and boards mined 3+ times without one get demoted (never dropped —
 postings turn over). Every board keeps a real chance: that randomness is what stops
 each session converging on the same pool. Boards that 404 four times running are
-pruned automatically.
+pruned automatically — but only real 404s count. Greenhouse answers 406 when it is
+throttling, and a throttled board is left completely untouched so a bad minute on
+their side can't quietly delete good boards from the pool.
 
 Default platforms are Greenhouse + Lever only — Ashby is Tier 3 HARD-AVOID per
 CLAUDE.md SITE ROUTING (blocks at submit regardless of IP), so sourcing it would fill
@@ -38,6 +40,8 @@ import json
 import random
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -385,32 +389,58 @@ def _get(url: str):
         return json.load(r)
 
 
-def fetch(board: tuple[str, str]) -> tuple[tuple[str, str], list[dict] | None]:
-    """Return (board, postings) — postings is None when the board failed to fetch."""
+def fetch(board: tuple[str, str]) -> tuple[tuple[str, str], list[dict] | None, str]:
+    """Return (board, postings, status).
+
+    status is "ok" | "missing" | "throttled". The distinction matters: a board that
+    404s is genuinely gone and should accrue `fails` toward auto-pruning, but a 406 or
+    429 means the *API* is refusing us right now and says nothing about the board.
+    Greenhouse starts returning 406 under sustained load — observed 2026-07-19, where
+    63 perfectly good boards all 406'd in one burst and every one of them answered 200
+    minutes later. Counting those as failures would have pruned them from rotation
+    after four throttled waves, silently shrinking the pool with no signal.
+    """
     platform, token = board
-    try:
-        if platform == "greenhouse":
-            jobs = _get(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs").get("jobs", [])
-            return board, [{
-                "title": j.get("title", ""),
-                "location": (j.get("location") or {}).get("name", ""),
-                "url": j.get("absolute_url", ""),
-            } for j in jobs]
-        if platform == "lever":
-            jobs = _get(f"https://api.lever.co/v0/postings/{token}?mode=json")
-            return board, [{
-                "title": j.get("text", ""),
-                "location": (j.get("categories") or {}).get("location", ""),
-                "url": j.get("hostedUrl") or j.get("applyUrl") or "",
-            } for j in jobs]
-        jobs = _get(f"https://api.ashbyhq.com/posting-api/job-board/{token}").get("jobs", [])
-        return board, [{
+    for attempt in range(2):
+        try:
+            return board, _fetch_once(platform, token), "ok"
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return board, None, "missing"
+            if attempt == 0:
+                time.sleep(1.5 + random.random())  # throttled or 5xx — back off once
+                continue
+            return board, None, "throttled"
+        except Exception:  # noqa: BLE001 — timeouts/DNS: transient, never a prune signal
+            if attempt == 0:
+                time.sleep(1.5 + random.random())
+                continue
+            return board, None, "throttled"
+    return board, None, "throttled"
+
+
+def _fetch_once(platform: str, token: str) -> list[dict]:
+    """One API call, normalised to {title, location, url}. Raises on any failure."""
+    if platform == "greenhouse":
+        jobs = _get(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs").get("jobs", [])
+        return [{
             "title": j.get("title", ""),
-            "location": str(j.get("location") or ""),
-            "url": j.get("jobUrl") or j.get("applyUrl") or "",
+            "location": (j.get("location") or {}).get("name", ""),
+            "url": j.get("absolute_url", ""),
         } for j in jobs]
-    except Exception:  # noqa: BLE001 — 404s/timeouts are routine; the board just misses this wave
-        return board, None
+    if platform == "lever":
+        jobs = _get(f"https://api.lever.co/v0/postings/{token}?mode=json")
+        return [{
+            "title": j.get("text", ""),
+            "location": (j.get("categories") or {}).get("location", ""),
+            "url": j.get("hostedUrl") or j.get("applyUrl") or "",
+        } for j in jobs]
+    jobs = _get(f"https://api.ashbyhq.com/posting-api/job-board/{token}").get("jobs", [])
+    return [{
+        "title": j.get("title", ""),
+        "location": str(j.get("location") or ""),
+        "url": j.get("jobUrl") or j.get("applyUrl") or "",
+    } for j in jobs]
 
 
 # --- main --------------------------------------------------------------------
@@ -460,11 +490,17 @@ def main(argv: list[str]) -> int:
     known = set() if args.include_seen else load_known_urls()
     blocked = load_blocked_companies()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rows, ok_boards, dead_boards = [], 0, 0
+    rows, ok_boards, dead_boards, throttled_boards = [], 0, 0, 0
 
-    for board, postings in results:
+    for board, postings, status in results:
         entry = state.setdefault(board, {"last_mined": "", "mines": 0, "hits": 0, "fails": 0})
-        if postings is None:
+        if status == "throttled":
+            # The API refused us; the board is not implicated. Leave state untouched so
+            # this costs the board neither a `fails` tick nor its staleness — it should
+            # come straight back up in the next wave's sample.
+            throttled_boards += 1
+            continue
+        if status == "missing":
             entry["fails"] += 1
             dead_boards += 1
             continue
@@ -514,7 +550,7 @@ def main(argv: list[str]) -> int:
         else "Rotation NOT updated (--no-rotate) — next run may mine these same boards."
     print(
         f"\n[source] {len(rows)} fresh jobs from {ok_boards} boards "
-        f"({dead_boards} unreachable) — lanes: {lanes_seen}. {rotated}",
+        f"({dead_boards} gone, {throttled_boards} throttled) — lanes: {lanes_seen}. {rotated}",
         file=sys.stderr,
     )
     return 0
