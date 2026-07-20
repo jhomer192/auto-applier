@@ -169,6 +169,9 @@ EXCLUDE = (
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
     "expression of interest", "talent pool", "talent community", "general application",
     "future opportunity", "join our",
+    # Geographic restriction spelled out in the title rather than the location, e.g.
+    # "Sales Representative (Central Midwest Candidates Only)" filed under "United States".
+    "candidates only", "residents only", "must reside in", "must be located in",
     # Roles gated on an ALREADY-ACTIVE clearance. profile.yaml records none, and a
     # clearance takes months and a sponsoring employer — so these can't convert.
     # Delete these four lines if Zach does in fact hold one.

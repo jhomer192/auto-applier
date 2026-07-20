@@ -243,3 +243,14 @@ def test_transient_error_retries_once_then_succeeds(monkeypatch):
     monkeypatch.setattr(source.time, "sleep", lambda *_: None)
     _board, postings, status = source.fetch(("lever", "flaky"))
     assert status == "ok" and len(postings) == 1 and calls["n"] == 2
+
+
+@pytest.mark.parametrize("title", [
+    "Medical Capital Equipment Sales Representative (Central Midwest Candidates Only)",
+    "Business Development Representative (Texas Residents Only)",
+    "Sales Development Representative - Must Reside In Colorado",
+])
+def test_geographic_restriction_in_title(title):
+    """Restriction stated in the title, filed under a country-wide location, so neither
+    the location string nor the state-code check catches it."""
+    assert classify(title, None) is None
