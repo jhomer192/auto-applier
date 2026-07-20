@@ -29,7 +29,7 @@ Default platforms are Greenhouse + Lever only — Ashby is Tier 3 HARD-AVOID per
 CLAUDE.md SITE ROUTING (blocks at submit regardless of IP), so sourcing it would fill
 a wave with applications that can never land. Pass --platforms to override.
 
-Pool lives in scripts/companies.txt (`platform:token`) — ~1,900 verified-live boards.
+Pool lives in scripts/companies.txt (`platform:token`) — ~2,100 verified-live boards.
 Add companies there; never hardcode them here.
 """
 from __future__ import annotations
@@ -40,6 +40,7 @@ import json
 import random
 import re
 import sys
+import os
 import time
 import urllib.error
 import urllib.request
@@ -63,16 +64,17 @@ BAY_TERMS = (
     "north bay", "east bay", "south bay",
     "san francisco", "sf,", "s.f.", "daly city", "brisbane, ca", "south san francisco",
     "san mateo", "redwood city", "palo alto", "menlo park", "foster city",
+    "los altos", "colma",
     "burlingame", "san bruno", "millbrae", "san carlos", "belmont, ca", "half moon bay",
     "east palo alto",
     "san jose", "santa clara", "sunnyvale", "mountain view", "cupertino", "milpitas",
     "los gatos", "campbell, ca", "saratoga, ca", "morgan hill", "gilroy",
-    "oakland", "berkeley", "emeryville", "alameda", "fremont, ca", "hayward",
+    "oakland", "berkeley", "emeryville", "alameda", "fremont, ca", "hayward, ca",
     "richmond, ca", "walnut creek", "pleasanton", "dublin, ca", "san ramon",
     "concord, ca", "union city, ca", "newark, ca", "castro valley", "san leandro",
     "pleasant hill", "danville, ca", "livermore", "martinez, ca", "lafayette, ca",
     "orinda", "albany, ca",
-    "marin", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
+    "marin county", "sausalito", "san rafael", "novato", "mill valley", "corte madera",
     "larkspur", "tiburon", "petaluma",
 )
 
@@ -110,6 +112,12 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         # board directly. These are squarely in-lane for a CompTIA-certified candidate.
         "fedramp", "soc 2", "iso 27001", "security assessment", "security consultant",
         "compliance consultant", "identity and access", "iam analyst",
+        # Trust & safety / abuse enforcement uses its own vocabulary. Anthropic alone
+        # had 13 invisible postings ("Safeguards Enforcement Analyst, Ban Evasion",
+        # "Safeguards Policy Analyst, Fraud & Scams"). "governance, risk" with the
+        # comma is how Everlaw writes a literal GRC Analyst req.
+        "safeguards", "enforcement analyst", "content moderat", "abuse",
+        "governance, risk", "grc analyst",
     )),
     "sdr": (1, (
         "sales development", "business development representative", "bdr", "sdr",
@@ -129,19 +137,24 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         "finance associate", "financial analyst", "risk operations", "aml",
         "fraud analyst", "fraud operations", "payments operations", "kyc",
         "compliance associate", "billing", "accounts payable", "accounts receivable",
+        "fraud", "payroll", "deal desk", "underwriting assistant",
     )),
     "cs": (3, (
         "customer success", "customer support", "customer experience",
         "client services", "support specialist", "support associate",
         "implementation", "onboarding associate",
+        "customer service", "client onboarding", "renewals", "member services",
     )),
     "ops": (3, (
         "operations associate", "operations coordinator", "business operations",
         "office coordinator", "office manager", "administrative assistant",
         "administrative coordinator", "program coordinator", "project coordinator",
+        "operations specialist", "order management", "logistics coordinator",
+        "logistics associate", "revenue operations", "sales operations",
     )),
     "analyst": (4, (
         "data analyst", "business analyst", "reporting analyst", "operations analyst",
+        "business systems analyst",
     )),
     "content": (4, (
         "content", "communications", "marketing coordinator", "marketing associate",
@@ -151,21 +164,32 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
 
 # Substring kill-list — seniority he can't reach, and technical ICs needing a coding
 # interview. Mirrors the HARD FIT FILTER in CLAUDE.md; keep the two in sync.
-# The "executive"/"sourcer"/contract entries came out of the 2026-07-19 wave, where
-# 54 of 72 sourced jobs were rejected by the brain after opening them — Account
-# Executive and Customer Success Executive are quota roles, recruiting sourcer roles
-# want recruiting experience, and contract/temp postings aren't what he's after.
+#
+# Calibrated 2026-07-19 against 50,373 live postings. Terms are only as broad as the
+# evidence supports — an over-broad term here is invisible, because the job simply
+# never appears and nothing records that it was dropped:
+#   - bare "executive" killed "Executive IT Support Specialist" (SpaceX, Palo Alto),
+#     "Account Executive - New Grad", and "Assistant Account Executive" (the entry rank
+#     in PR). Narrowed to the specific quota titles.
+#   - the contract/temp family is GONE. profile.yaml's own excluded_title_keywords are
+#     only senior/staff/principal/lead/manager/director, and Zach's own resume lists
+#     "Cybersecurity Content Consultant (Subcontractor)" — he has done contract work.
+#     It was killing "Recruiting Coordinator (Contract)" at Vercel and Mainspring,
+#     which are among the highest-conversion openings a zero-experience candidate gets.
+#   - " ii" killed "Associate Operations Support Specialist II" and "IT Support
+#     Specialist II". Level II is 1-2 years, not out of reach. III/IV stay.
 EXCLUDE = (
     "senior", "sr.", "sr ", "(sr", "sr)", "staff", "principal", "director", "vp ",
     "vice president", "head of", "manager", "lead ", " lead", "architect", "chief",
-    "executive", "business partner", "commander", "sourcer",
-    "contract", "temporary", "temp ", "part time", "part-time", "seasonal",
-    " ii", " iii", " iv", "level 2", "level 3",
+    "account executive", "executive director", "executive assistant", "sales executive",
+    "client executive", "business partner", "commander", "sourcer",
+    "part time", "part-time", "seasonal", "driver", "success executive",
+    " iii", " iv", "level 3",
     "software engineer", "software developer", "developer", "engineer", "engineering",
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
     "counsel", "attorney", "paralegal", "legal", "nurse", "clinical", "physician",
-    "pharmac", "cpa", "tax ", "audit", "accountant", "intern", "phd",
+    "pharmac", "cpa", "tax ", "audit", "accountant", "phd",
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
     "expression of interest", "talent pool", "talent community", "general application",
     "future opportunity", "join our",
@@ -178,6 +202,20 @@ EXCLUDE = (
     "cleared", "clearance", "ts/sci", "polygraph",
     "tier 3",  # escalation tier — tier 1/2 support stays in-lane
 )
+# Support/IT/SecOps titles that legitimately carry the word "engineer". These are
+# exempt from the engineer/developer family below — see the carve-out in classify().
+SUPPORT_SAFE = (
+    "technical support", "support engineer", "it support", "help desk", "helpdesk",
+    "service desk", "desktop support", "customer support", "customer success",
+    "implementation engineer", "security operations", "content developer",
+)
+ENGINEER_FAMILY = ("software engineer", "software developer", "developer", "engineer",
+                   "engineering")
+_EXCLUDE_NO_ENG = tuple(x for x in EXCLUDE if x not in ENGINEER_FAMILY)
+# Internships only — the bare substring "intern" also matched "Internal Communications
+# Specialist" (Penumbra, Alameda) and anything "International".
+_INTERNSHIP = re.compile(r"\bintern(ship)?s?\b")
+
 # Signals a posting is calibrated for zero experience — these get ranked up.
 EARLY_SIGNALS = (
     "new grad", "early career", "entry level", "entry-level", "associate", "trainee",
@@ -186,7 +224,7 @@ EARLY_SIGNALS = (
 # Non-US markers that disqualify an otherwise-"remote" posting.
 NON_US = (
     "canada", "toronto", "vancouver", "montreal", "uk", "united kingdom", "london",
-    "ireland", "dublin", "emea", "europe", "germany", "berlin", "munich", "france",
+    "ireland", "emea", "europe", "germany", "berlin", "munich", "france",
     "paris", "spain", "madrid", "barcelona", "portugal", "lisbon", "netherlands",
     "amsterdam", "poland", "warsaw", "krakow", "romania", "india", "bangalore",
     "hyderabad", "pune", "singapore", "japan", "tokyo", "australia", "sydney",
@@ -218,6 +256,11 @@ US_REMOTE = (
 # (Nscale Operations UK Ltd among them) because the location string alone looked clean.
 FOREIGN_HOSTS = ("eu.greenhouse.io",)
 # Locations that name the country and nothing else — no city, so nothing to commute to.
+# "Remote" that is really "remote if you're on the other coast". He is Pacific.
+COAST_LOCKED = (
+    "us east", "u.s. east", "east coast", "us central", "midwest only",
+    "est or cst", "et or ct", "eastern time", "central time", "eastern or central",
+)
 US_ONLY_LOCATIONS = frozenset({
     "united states", "united states of america", "us", "usa", "u s", "u s a",
     "us remote", "remote us", "remote united states", "united states remote",
@@ -231,13 +274,53 @@ def _squash(text: str) -> str:
 
 
 _STATE_IN_TITLE = re.compile(r",\s*([A-Z]{2})\b")
+_CA_CODE = re.compile(r",\s*CA\b")
+# Real USPS codes only. Accepting any bare [A-Z]{2} read "Remote, US" as a state, and
+# did the same to "Inside Sales Representative, MM (PAM)" and "Analyst, AI".
+_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DC DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+    "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY".split()
+)
+# Full state names, minus California. This generalises the ", ca" qualification on
+# ambiguous city names: rather than chase every Bay city with a namesake elsewhere
+# (Sunnyvale TX, Menlo Park NJ, Berkeley MO, Santa Clara UT, Mountain View AR,
+# Hayward WI, Alameda NM), disqualify on the state the posting actually names.
+_OTHER_STATES = (
+    "alabama", "alaska", "arizona", "arkansas", "colorado", "connecticut", "delaware",
+    "florida", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
+    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
+    "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming",
+)
+
+
+def _other_state_only(location: str) -> bool:
+    """True if the location names a non-CA state and never California.
+
+    Multi-site postings that include California ("San Francisco, CA; New York, NY")
+    are kept — he can take the Bay seat. Postings naming only somewhere else
+    ("Livingston, NJ / New York, NY", "Sunnyvale, TX") are not reachable, and were
+    slipping through on bare Bay Area city names that have namesakes out of state.
+    """
+    if not location:
+        return False
+    loc = location.lower()
+    if "california" in loc or _CA_CODE.search(location):
+        return False
+    codes = {c for c in _STATE_IN_TITLE.findall(location)
+             if c in _STATE_CODES and c != "CA"}
+    return bool(codes) or any(s in loc for s in _OTHER_STATES)
 
 
 def _names_other_state(title: str) -> bool:
     """True if the title pins the role to a non-California state, e.g.
     "Outside Sales Representative - Portland, OR". Such postings are routinely filed
     under a country-wide location, so the location string alone won't catch them."""
-    return any(s != "CA" for s in _STATE_IN_TITLE.findall(title))
+    return any(s != "CA" and s in _STATE_CODES
+               for s in _STATE_IN_TITLE.findall(title))
 
 
 # --- pool + rotation state ---------------------------------------------------
@@ -269,13 +352,20 @@ def load_rotation() -> dict[tuple[str, str], dict]:
     return state
 
 
-def save_rotation(state: dict[tuple[str, str], dict]) -> None:
+def save_rotation(state: dict[tuple[str, str], dict], keep: set | None = None) -> None:
+    """Write rotation state atomically. open("w") truncates immediately, and a partial
+    file reloads without error — load_rotation() happily parsed a half-written file as
+    1,041 of 2,111 rows. Temp-file-and-rename makes the swap all-or-nothing."""
     ROTATION_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with ROTATION_PATH.open("w", newline="") as f:
+    if keep is not None:  # drop boards that have left companies.txt
+        state = {k: v for k, v in state.items() if k in keep}
+    tmp = ROTATION_PATH.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(ROTATION_HEADER)
         for (platform, token), v in sorted(state.items()):
             w.writerow([platform, token, v["last_mined"], v.get("mines", 0), v["hits"], v["fails"]])
+    os.replace(tmp, ROTATION_PATH)
 
 
 def _age_hours(last_mined: str) -> float:
@@ -308,10 +398,14 @@ def pick_boards(pool, state, k: int) -> list[tuple[str, str]]:
     for b in live:
         s = state.get(b, {})
         weight = 1.0 + _age_hours(s.get("last_mined", ""))
-        if s.get("hits", 0) > 0:
-            weight *= 2.0                      # exploit: it has paid out before
-        elif s.get("mines", 0) >= 3:
-            weight *= 0.25                     # demote: mined repeatedly, never a match
+        mines = s.get("mines", 0)
+        if mines:
+            # Hit RATE, not a hits>0 flag. As a flag the signal self-destructs: hits
+            # never decays, so one lucky match pinned a board at x2 forever and made
+            # the demotion branch unreachable for it. Simulated over the real pool,
+            # 62% of boards were boosted by wave 100 and ~100% by wave 300, at which
+            # point the multiplier cancels out and productivity becomes pure noise.
+            weight *= 0.25 + min(2.0, 4.0 * s.get("hits", 0) / mines)
         keyed.append((random.random() ** (1.0 / weight), b))
     keyed.sort(reverse=True)
     return [b for _, b in keyed[:k]]
@@ -321,7 +415,17 @@ def pick_boards(pool, state, k: int) -> list[tuple[str, str]]:
 def classify(title: str, lane_filter: str | None) -> str | None:
     """Return the lane a title belongs to, or None if it isn't a target role."""
     t = f" {title.lower()} "
-    if any(x in t for x in EXCLUDE):
+    # CLAUDE.md's HARD FIT FILTER says to drop pure SWE "UNLESS it says IT/Support/
+    # SecOps". source.py had no such carve-out, so a bare "engineer" substring was
+    # killing the best-converting lane he has: "Technical Support Engineer - University
+    # Graduate 2026" (Verkada, San Mateo), "IT Help Desk Engineer" (C3 AI, Redwood
+    # City), "Security Operations Engineer" (Pure Storage). 24 real postings per
+    # 900-board sweep. Support titles are exempt from the engineer/developer family
+    # only — every other exclusion still applies to them.
+    kill = EXCLUDE if not any(s in t for s in SUPPORT_SAFE) else _EXCLUDE_NO_ENG
+    if any(x in t for x in kill):
+        return None
+    if _INTERNSHIP.search(t):  # word-boundary: don't kill "Internal"/"International"
         return None
     for lane, (_tier, keywords) in LANES.items():
         if lane_filter and lane != lane_filter:
@@ -335,6 +439,10 @@ def location_ok(location: str, title: str, url: str = "") -> bool:
     """Bay Area, or a fully-remote-US role (Jack, 2026-07-19). Everything else drops."""
     blob = f"{location} {title}".lower()
     if any(x in blob for x in NON_US):
+        return False
+    if _other_state_only(location):
+        return False
+    if any(c in blob for c in COAST_LOCKED):
         return False
     if any(h in url.lower() for h in FOREIGN_HOSTS):
         # Foreign board: the location has to name a US place itself. A bare "Remote"
@@ -465,6 +573,11 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv[1:])
 
     wanted = {p.strip().lower() for p in args.platforms.split(",") if p.strip()}
+    unknown = wanted - {"greenhouse", "lever", "ashby"}
+    if unknown:
+        print(f"unknown platform(s): {sorted(unknown)} — expected greenhouse/lever/ashby",
+              file=sys.stderr)
+        return 2
     pool = [b for b in load_pool() if b[0] in wanted]
     state = load_rotation()
     if not pool:
@@ -527,8 +640,8 @@ def main(argv: list[str]) -> int:
                 "sort": (tier - (0.5 if early else 0), random.random()),
                 "url": url, "company": board[1], "title": title,
                 "location": p["location"] or "?", "lane": lane,
+                "board": board,
             })
-            entry["hits"] += 1
 
     # Cap per company before truncating — one 700-posting board would otherwise
     # eat the whole wave, which is the crowding-out this script exists to fix.
@@ -542,11 +655,32 @@ def main(argv: list[str]) -> int:
         capped.append(r)
     rows = capped[: args.n]
 
+    # Credit productivity from the jobs that actually reached the wave, not from every
+    # pre-cap match. Measured at --boards 400: 99 hits were credited across 42 boards
+    # while only 30 rows printed — 70% of the credit was for jobs nobody ever saw, and
+    # the aggregator board lever:jobgether banked 40 hits while showing 3.
+    # --lane and --include-seen deliberately skew what counts as a match, so they must
+    # not write productivity back into shared state.
+    if not (args.lane or args.include_seen):
+        for r in rows:
+            state[r["board"]]["hits"] += 1
+
     if not args.no_rotate:
-        save_rotation(state)
+        save_rotation(state, keep=set(pool))
 
     for r in rows:
         print("\t".join([r["url"], r["company"], r["title"], r["location"], r["lane"]]))
+
+    if ok_boards == 0 or throttled_boards > ok_boards:
+        print(
+            f"WARNING: {ok_boards} boards answered, {throttled_boards} throttled, "
+            f"{dead_boards} gone. This is an API problem, not an empty market — "
+            f"re-run before concluding the wave is dry.",
+            file=sys.stderr,
+        )
+        if not args.no_rotate:
+            save_rotation(state, keep=set(pool))
+        return 2
 
     lanes_seen = ", ".join(sorted({r["lane"] for r in rows})) or "none"
     rotated = "Rotation updated; next run mines different boards." if not args.no_rotate \

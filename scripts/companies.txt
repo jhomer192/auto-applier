@@ -23,9 +23,9 @@
 # productivity weighting in pick_boards(), which demotes them after 3 fruitless mines
 # without ever dropping them.
 #
-# Pool: 2111 boards (1562 greenhouse, 443 lever, 106 ashby).
+# Pool: 2097 boards (1553 greenhouse, 438 lever, 106 ashby).
 
-# ---- GREENHOUSE — Tier 1 (1562) ---------------------------------
+# ---- GREENHOUSE — Tier 1 (1553) ---------------------------------
 greenhouse:2u
 greenhouse:3cloud
 greenhouse:541
@@ -51,7 +51,6 @@ greenhouse:affinidi
 greenhouse:affinitiv
 greenhouse:affirm
 greenhouse:afresh
-greenhouse:agency
 greenhouse:agero
 greenhouse:agibank
 greenhouse:agilesix
@@ -127,7 +126,6 @@ greenhouse:armada
 greenhouse:armissecurity
 greenhouse:armorcode
 greenhouse:artefact
-greenhouse:artefactlinkedin
 greenhouse:arvinas
 greenhouse:arxroboticsgmbh
 greenhouse:asana
@@ -302,7 +300,6 @@ greenhouse:clickhouse
 greenhouse:climateai
 greenhouse:clinchoice
 greenhouse:cloudbeds
-greenhouse:cloudbedsthirdpartyboard
 greenhouse:cloudflare
 greenhouse:cloudsek
 greenhouse:clutch
@@ -339,7 +336,6 @@ greenhouse:corasps
 greenhouse:corcepttherapeutics
 greenhouse:corelight
 greenhouse:coreweave
-greenhouse:coreweaveu
 greenhouse:correlationone
 greenhouse:cortex
 greenhouse:couchbaseinc
@@ -373,7 +369,6 @@ greenhouse:datacamp
 greenhouse:datadog
 greenhouse:datagrail
 greenhouse:dataiku
-greenhouse:dataikujobs
 greenhouse:datavations
 greenhouse:daybreakhealth
 greenhouse:daylight
@@ -476,7 +471,6 @@ greenhouse:everdriven
 greenhouse:everlaw
 greenhouse:everstreamanalytics
 greenhouse:evolutioniq
-greenhouse:example
 greenhouse:excella
 greenhouse:exclaimer
 greenhouse:exiger
@@ -667,7 +661,6 @@ greenhouse:humeai
 greenhouse:huntress
 greenhouse:hut8
 greenhouse:hyperproof
-greenhouse:hyphenconnect
 greenhouse:icarus
 greenhouse:icgmedical
 greenhouse:iconiq
@@ -1150,7 +1143,6 @@ greenhouse:redapt
 greenhouse:redcircle
 greenhouse:reddit
 greenhouse:redwoodsoftware
-greenhouse:referralsuseonly
 greenhouse:refeyn
 greenhouse:reflex
 greenhouse:reformation
@@ -1165,7 +1157,6 @@ greenhouse:remesh
 greenhouse:remote
 greenhouse:remotecom
 greenhouse:remotepeople
-greenhouse:remotereferralboardinternaluseonly
 greenhouse:remotewoman
 greenhouse:reolink
 greenhouse:resortpass
@@ -1589,7 +1580,7 @@ greenhouse:zuora
 greenhouse:zupinnovation
 greenhouse:zwift
 
-# ---- LEVER — Tier 1 (443) --------------------------------------
+# ---- LEVER — Tier 1 (438) --------------------------------------
 lever:15five
 lever:21hhs
 lever:32Co
@@ -1655,7 +1646,6 @@ lever:bloom
 lever:blue
 lever:bluebottlecoffee
 lever:bluecatnetworks
-lever:bluelightconsulting
 lever:bolster
 lever:bosonai
 lever:boxlunch
@@ -1766,7 +1756,6 @@ lever:genbio
 lever:geocomply-2
 lever:getmaple
 lever:getsquire
-lever:getwingapp
 lever:glide
 lever:gohighlevel
 lever:gomaterials
@@ -1800,7 +1789,6 @@ lever:intersect
 lever:jamcity
 lever:JetBridge
 lever:jitxinc
-lever:jobgether
 lever:jobvite
 lever:jumpcloud
 lever:jupe
@@ -1986,7 +1974,6 @@ lever:trueml
 lever:trustly
 lever:truv
 lever:tryjeeves
-lever:tsmg
 lever:turgon-ai
 lever:tusker
 lever:tutorintelligence
@@ -2012,7 +1999,6 @@ lever:watchguard
 lever:wealthfront
 lever:webfx
 lever:weekdayworks
-lever:weloglobal
 lever:weride
 lever:whoop
 lever:windfalldata

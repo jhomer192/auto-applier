@@ -24,12 +24,26 @@ REJECTED = [
     "Talent Sourcer - Temporary",
     "Executive Sourcer",
     "Technical Talent Sourcer (6-Month Contract)",
-    "Customer Success Executive",
     "Customer Success Account Executive",
     "Account Executive PR Communications",
-    "Executive IT Support Specialist",
     "Operations Associate Part Time",
     "Expression of Interest: School Sales Representative (Remote, US)",
+]
+
+# Deliberately un-filtered on review (2026-07-19). Bare "executive" was killing
+# "Executive IT Support Specialist" (SpaceX, Palo Alto) and "Account Executive - New
+# Grad"; "Customer Success Executive" survives via the narrower "success executive".
+# The sourcer is a first pass on TITLES — the brain still does the fit read, and
+# missing a good role costs an opportunity while surfacing a marginal one costs one
+# page load.
+UNFILTERED_ON_PURPOSE = [
+    ("Executive IT Support Specialist", "it"),
+    ("Recruiting Coordinator (Contract)", "people"),
+    ("IT Support Specialist II", "it"),
+    ("Technical Support Engineer - University Graduate 2026", "it"),
+    ("IT Help Desk Engineer", "it"),
+    ("Security Operations Engineer", "security"),
+    ("Internal Communications Specialist", "content"),
 ]
 
 # Titles that DID convert to an application on 2026-07-19. Must keep passing.
@@ -254,3 +268,187 @@ def test_geographic_restriction_in_title(title):
     """Restriction stated in the title, filed under a country-wide location, so neither
     the location string nor the state-code check catches it."""
     assert classify(title, None) is None
+
+
+@pytest.mark.parametrize("title,lane", UNFILTERED_ON_PURPOSE)
+def test_deliberately_unfiltered(title, lane):
+    assert classify(title, None) == lane
+
+
+@pytest.mark.parametrize("title", [
+    "Customer Success Executive", "Software Engineer", "Senior Software Engineer",
+    "Backend Engineer", "Staff Machine Learning Engineer",
+    "Customer Service Delivery Driver - San Francisco",
+])
+def test_still_filtered(title):
+    """The narrowing must not become a hole: quota roles and pure SWE stay dead."""
+    assert classify(title, None) is None
+
+
+def test_foreign_host_gate_is_load_bearing():
+    """A discriminating input. The previous two EU tests passed with FOREIGN_HOSTS
+    deleted entirely — their inputs were already rejected by the ordinary rule, so
+    they asserted nothing. Here the US marker is in the TITLE and not the location,
+    so the result differs with and without the gate."""
+    args = ("Remote", "Sales Development Representative, United States")
+    assert not location_ok(*args, "https://job-boards.eu.greenhouse.io/x/jobs/1")
+    assert location_ok(*args, "https://boards.greenhouse.io/x/jobs/1")
+
+
+def test_dublin_ca_is_not_dublin_ireland():
+    """NON_US ran before the Bay check, so bare "dublin" deleted Dublin, CA — including
+    multi-site postings that also named San Francisco and Oakland."""
+    assert location_ok("Dublin, CA", "Compliance Analyst", "u")
+    assert location_ok("San Francisco, CA; Dublin, CA; Oakland, CA", "Compliance Analyst", "u")
+    assert not location_ok("Dublin, Ireland", "Compliance Analyst", "u")
+    assert not location_ok("Dublin, OH", "Compliance Analyst", "u")
+
+
+@pytest.mark.parametrize("location,expected", [
+    ("Sunnyvale, TX, United States", False),   # Sunnyvale TX is a Dallas suburb
+    ("Sunnyvale, CA", True),
+    ("Marina Del Rey, CA", False),             # matched on "marin"
+    ("Marin County, CA", True),
+    ("Haywards Heath, West Sussex", False),    # matched on "hayward"
+    ("Hayward, CA", True),
+    ("Berkeley Heights, NJ", False),
+    ("Los Altos, CA", True),
+    ("Colma, CA", True),
+])
+def test_substring_collisions(location, expected):
+    assert location_ok(location, "Sales Development Representative", "u") is expected
+
+
+@pytest.mark.parametrize("title", [
+    "Inside Sales Representative, MM (PAM)",
+    "Sales Development Representative, US (PerfectScale & SELECT)",
+    "Sales Representative, SMB (Remote, US)",
+])
+def test_two_letter_tokens_are_not_states(title):
+    """`,\\s*([A-Z]{2})` captured AI/US/MM/CX/RN and killed real remote-US roles —
+    60% of that branch's rejections were wrong on live data."""
+    assert location_ok("Remote, US", title, "https://boards.greenhouse.io/x/jobs/1")
+
+
+# --- main() level -------------------------------------------------------------
+# The consumer half of the throttle fix had no coverage: fetch()'s 406-vs-404
+# classification was tested, but not main()'s duty to leave state untouched. A
+# mutation putting `fails += 1` back on the throttled path survived the whole suite.
+
+@pytest.fixture
+def sandbox(tmp_path, monkeypatch):
+    """Point source.py's paths at a throwaway pool + rotation file."""
+    pool = tmp_path / "companies.txt"
+    pool.write_text("greenhouse:alpha\ngreenhouse:beta\nlever:gamma\n")
+    monkeypatch.setattr(source, "POOL_PATH", pool)
+    monkeypatch.setattr(source, "ROTATION_PATH", tmp_path / "board_rotation.csv")
+    for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH"):
+        monkeypatch.setattr(source, attr, tmp_path / f"{attr.lower()}.missing")
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    return tmp_path
+
+
+def _rotation_rows(tmp_path):
+    import csv as _csv
+    f = tmp_path / "board_rotation.csv"
+    if not f.exists():
+        return {}
+    with f.open(newline="") as fh:
+        return {(r["platform"], r["token"]): r for r in _csv.DictReader(fh)}
+
+
+def test_throttled_board_never_accrues_fails(sandbox, monkeypatch, capsys):
+    """The bug a420811 fixed: 4 throttled waves silently delete a healthy board."""
+    import urllib.error
+
+    def throttle(platform, token):
+        raise urllib.error.HTTPError("http://x", 406, "throttled", {}, None)
+
+    monkeypatch.setattr(source, "_fetch_once", throttle)
+    rc = source.main(["source.py", "--boards", "3"])
+    assert rc == 2, "a wave where nothing answered must fail loudly, not look dry"
+    for row in _rotation_rows(sandbox).values():
+        assert int(row["fails"]) == 0
+        assert int(row["mines"]) == 0
+        assert row["last_mined"] == ""
+    assert "API problem" in capsys.readouterr().err
+
+
+def test_missing_board_does_accrue_fails(sandbox, monkeypatch):
+    import urllib.error
+    calls = {"n": 0}
+
+    def one_gone(platform, token):
+        calls["n"] += 1
+        if token == "alpha":
+            raise urllib.error.HTTPError("http://x", 404, "gone", {}, None)
+        return [{"title": "SDR", "location": "San Francisco, CA",
+                 "url": f"https://boards.greenhouse.io/{token}/jobs/{calls['n']}"}]
+
+    monkeypatch.setattr(source, "_fetch_once", one_gone)
+    assert source.main(["source.py", "--boards", "3"]) == 0
+    rows = _rotation_rows(sandbox)
+    assert int(rows[("greenhouse", "alpha")]["fails"]) == 1
+    assert int(rows[("greenhouse", "beta")]["fails"]) == 0
+
+
+def test_per_company_cap_and_n_limit(sandbox, monkeypatch, capsys):
+    def flood(platform, token):
+        return [{"title": "Sales Development Representative",
+                 "location": "San Francisco, CA",
+                 "url": f"https://boards.greenhouse.io/{token}/jobs/{i}"}
+                for i in range(50)]
+
+    monkeypatch.setattr(source, "_fetch_once", flood)
+    source.main(["source.py", "--boards", "3", "--per-company", "2", "--n", "4"])
+    lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
+    assert len(lines) == 4, "the --n cap must hold"
+    from collections import Counter
+    assert max(Counter(l.split("\t")[1] for l in lines).values()) <= 2
+
+
+def test_hits_credited_only_for_shown_jobs(sandbox, monkeypatch):
+    """A board that floods 50 matches but is capped to 2 must not bank 50 hits."""
+    def flood(platform, token):
+        return [{"title": "Sales Development Representative",
+                 "location": "San Francisco, CA",
+                 "url": f"https://boards.greenhouse.io/{token}/jobs/{i}"}
+                for i in range(50)]
+
+    monkeypatch.setattr(source, "_fetch_once", flood)
+    source.main(["source.py", "--boards", "3", "--per-company", "2", "--n", "4"])
+    assert sum(int(r["hits"]) for r in _rotation_rows(sandbox).values()) == 4
+
+
+def test_applied_urls_are_deduped(sandbox, monkeypatch, capsys):
+    """Dedup against applied.csv is the script's entire reason to exist."""
+    applied = sandbox / "applied.csv"
+    applied.write_text("timestamp,url,company,title\n"
+                       "t,https://boards.greenhouse.io/alpha/jobs/1,alpha,SDR\n")
+    monkeypatch.setattr(source, "APPLIED_PATH", applied)
+
+    def one(platform, token):
+        return [{"title": "Sales Development Representative",
+                 "location": "San Francisco, CA",
+                 "url": f"https://boards.greenhouse.io/{token}/jobs/1"}]
+
+    monkeypatch.setattr(source, "_fetch_once", one)
+    source.main(["source.py", "--boards", "3"])
+    out = capsys.readouterr().out
+    assert "/alpha/jobs/1" not in out
+    assert "/beta/jobs/1" in out
+
+
+def test_ashby_is_off_by_default(sandbox, monkeypatch, capsys):
+    (sandbox / "companies.txt").write_text("ashby:acme\ngreenhouse:alpha\n")
+
+    seen = []
+
+    def record(platform, token):
+        seen.append(platform)
+        return [{"title": "SDR", "location": "San Francisco, CA",
+                 "url": f"https://x/{token}/1"}]
+
+    monkeypatch.setattr(source, "_fetch_once", record)
+    source.main(["source.py", "--boards", "5"])
+    assert "ashby" not in seen

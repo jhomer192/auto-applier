@@ -54,5 +54,20 @@ def normalize(url: str) -> str:
         if path.endswith("/apply"):
             path = path[: -len("/apply")]
 
+    # --- Greenhouse-embedded company career pages --------------------------
+    # 203 boards in the pool serve postings from the COMPANY's own domain, with the
+    # job id only in the query: stripe.com/jobs/listing?gh_jid=123, coreweave.com/
+    # careers?gh_jid=456. Dropping the query collapsed every posting on such a board
+    # to a single key — so after one match the rest were discarded within a run, and
+    # once a job was applied to, every future posting from that company was invisible
+    # forever (databricks 787 postings -> 1 key, stripe 525 -> 1, waymo 402 -> 1).
+    #
+    # Only for non-canonical hosts: on boards.greenhouse.io the id is already in the
+    # path, so keeping gh_jid there would break the boards/job-boards host folding.
+    else:
+        jid = parse_qs(p.query).get("gh_jid")
+        if jid and jid[0]:
+            query = f"gh_jid={jid[0]}"
+
     # --- Default: drop query + fragment, keep scheme/path -----------------
     return urlunparse((p.scheme or "https", netloc, path, "", query, ""))

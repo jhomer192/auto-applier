@@ -101,14 +101,14 @@ to a different, cleaner job instead.
 Waves were running dry because every session sourced the same way — web search plus the
 same ~30 famous boards — so it kept re-finding jobs already in `applied.csv` / `seen.csv`
 and spun in a circle. `scripts/source.py` fixes that: it queries **live** ATS board APIs
-across a 701-board pool (595 Tier-1 Greenhouse/Lever) and **rotates** which boards it hits, weighted by how long since
+across a 1,991-board Tier-1 pool (2,097 including Ashby) and **rotates** which boards it hits, weighted by how long since
 each was last mined, with real randomness on top — so consecutive sessions land on
 different companies. Verified: three back-to-back runs returned 66 jobs across 41
 companies with **zero** overlap.
 
 ```bash
-python3 scripts/source.py --n 30 --boards 50     # start of a wave: 30 fresh jobs
-python3 scripts/source.py --n 60 --boards 90     # deeper backlog for a long wave
+python3 scripts/source.py                        # start of a wave: 30 jobs, 400 boards
+python3 scripts/source.py --n 60 --boards 900    # deeper backlog for a long wave
 python3 scripts/source.py --lane security        # one lane only
 python3 scripts/source.py --stats                # which boards are stalest, what's pruned
 ```
@@ -142,8 +142,8 @@ only decides what's worth opening — it is a first pass on titles, not a fit de
   fresh rather than resurfacing the same rejects.
 - If a wave comes back thin across the board, the pool needs widening: add
   `platform:token` lines to `scripts/companies.txt` (one per line, no code change). The
-  pool is ~1,900 verified-live boards, so thin waves are much more likely to mean the
-  filters are too tight than that the pool is too small — check `--boards 1900` output
+  pool is ~2,100 verified-live boards, so thin waves are much more likely to mean the
+  filters are too tight than that the pool is too small — check `--boards 2100` output
   before hunting for new companies. A company missing from one platform is often on
   another — try the same token on greenhouse/lever/ashby before concluding it's
   unreachable. Dead tokens self-prune after 4 consecutive failures
