@@ -476,3 +476,37 @@ def test_work_from_home_data_entry_spam(title):
 ])
 def test_remote_must_come_from_the_location(location, title, expected):
     assert location_ok(location, title, "https://boards.greenhouse.io/x/1") is expected
+
+
+# --- pruning is not a one-way door -------------------------------------------
+def test_prune_amnesty():
+    """A pruned board is never fetched again, so `fails` can never reset — pruning was
+    permanent. A four-wave outage (or a 406 throttling storm) would delete a healthy
+    board from the pool forever. One retry a month makes it recoverable."""
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(timespec="seconds")
+    stale = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat(timespec="seconds")
+    assert source._is_live({"fails": 0})
+    assert source._is_live({"fails": source.DEAD_AFTER - 1, "last_mined": recent})
+    assert not source._is_live({"fails": source.DEAD_AFTER, "last_mined": recent})
+    assert source._is_live({"fails": source.DEAD_AFTER, "last_mined": stale})
+
+
+def test_blocked_companies_are_not_even_fetched(sandbox, monkeypatch):
+    """A blocklisted board was still mined every rotation, burning a slot it can
+    never repay."""
+    blocklist = sandbox / "blocklist.txt"
+    blocklist.write_text("boards.greenhouse.io\talpha\tcaptcha wall\n")
+    monkeypatch.setattr(source, "BLOCKLIST_PATH", blocklist)
+    fetched = []
+
+    def record(platform, token):
+        fetched.append(token)
+        return [{"title": "Sales Development Representative",
+                 "location": "San Francisco, CA",
+                 "url": f"https://boards.greenhouse.io/{token}/jobs/1"}]
+
+    monkeypatch.setattr(source, "_fetch_once", record)
+    source.main(["source.py", "--boards", "5"])
+    assert "alpha" not in fetched
+    assert "beta" in fetched

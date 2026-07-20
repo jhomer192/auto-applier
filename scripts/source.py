@@ -382,6 +382,19 @@ def _age_hours(last_mined: str) -> float:
     return max(0.0, (datetime.now(timezone.utc) - then).total_seconds() / 3600)
 
 
+def _is_live(s: dict) -> bool:
+    """A pruned board gets one amnesty retry a month.
+
+    Pruning was otherwise permanent and invisible: a board filtered out of `live` is
+    never fetched, so `fails` can never reset to 0. A four-wave outage — or the 406
+    throttling storm that prompted the ok/missing/throttled split — would delete a
+    healthy board from the pool forever, with only a `pruned=N` count to show for it.
+    """
+    if s.get("fails", 0) < DEAD_AFTER:
+        return True
+    return _age_hours(s.get("last_mined", "")) > 24 * 30
+
+
 def pick_boards(pool, state, k: int) -> list[tuple[str, str]]:
     """Weighted sample without replacement, weight = staleness × productivity.
 
@@ -394,7 +407,7 @@ def pick_boards(pool, state, k: int) -> list[tuple[str, str]]:
     no Bay-Area entry-level roles at all). Duds are demoted, never dropped — their
     postings turn over, and staleness eventually floats them back up.
     """
-    live = [b for b in pool if state.get(b, {}).get("fails", 0) < DEAD_AFTER]
+    live = [b for b in pool if _is_live(state.get(b, {}))]
     keyed = []
     for b in live:
         s = state.get(b, {})
@@ -587,16 +600,25 @@ def main(argv: list[str]) -> int:
         return 1
 
     if args.stats:
-        live = [b for b in pool if state.get(b, {}).get("fails", 0) < DEAD_AFTER]
+        live = [b for b in pool if _is_live(state.get(b, {}))]
         never = [b for b in live if not state.get(b, {}).get("last_mined")]
-        dead = [b for b in pool if state.get(b, {}).get("fails", 0) >= DEAD_AFTER]
+        dead = [b for b in pool if not _is_live(state.get(b, {}))]
         print(f"pool={len(pool)} live={len(live)} never_mined={len(never)} pruned={len(dead)}")
+        for b in dead:  # name them — a silent prune is indistinguishable from a bug
+            s = state.get(b, {})
+            print(f"  PRUNED {b[0]}:{b[1]}  fails={s.get('fails', 0)} "
+                  f"last_mined={s.get('last_mined') or 'never'}")
         ranked = sorted(live, key=lambda b: -_age_hours(state.get(b, {}).get("last_mined", "")))
         for b in ranked[:15]:
             age = _age_hours(state.get(b, {}).get("last_mined", ""))
             print(f"  {b[0]}:{b[1]}  stale={age/24:.1f}d  hits={state.get(b, {}).get('hits', 0)}")
         return 0
 
+    # Drop blocked companies before sampling: they were still fetched every rotation,
+    # always yielded nothing, and consumed a slot they can never repay.
+    blocked_now = load_blocked_companies()
+    if blocked_now:
+        pool = [b for b in pool if b[1].lower() not in blocked_now]
     boards = pick_boards(pool, state, args.boards)
     if not boards:
         print("no live boards in pool — check scripts/companies.txt", file=sys.stderr)
