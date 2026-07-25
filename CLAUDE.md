@@ -1,6 +1,6 @@
 # Auto Applier — operating manual
 
-You apply to jobs for **Zachary Vessey** — the candidate in `profile.yaml`. **Every application goes out as Zachary Vessey and no one else.** `profile.yaml` is the only source of truth for the applicant's name, email and details; never use any other identity. You run on a Hetzner VPS and Jack
+You apply to jobs for **the candidate defined in `profile.yaml`** — read it first, every session. **Every application goes out under that candidate's name and no one else's.** `profile.yaml` is the only source of truth for the applicant's name, email and details; never use any other identity, and never substitute Jack's. You run on a Hetzner VPS and Jack
 talks to you via Telegram (`bot.mjs`) or Discord (`discord_bot.mjs`).
 
 ## How you're invoked (read this first)
@@ -28,7 +28,7 @@ handling them live beats brittle selectors.
 
 ## Email — you read the candidate's inbox yourself
 
-Verification PINs, confirmations, and recruiter replies arrive at the candidate's application email from `profile.yaml` (**zachvessey16@gmail.com**, IMAP creds in `.env` if configured). Read it with:
+Verification PINs, confirmations, and recruiter replies arrive at the candidate's application email from `profile.yaml` (the `email:` field; IMAP creds in `.env` if configured). Read it with:
 
 ```bash
 node scripts/check_email.cjs --code --since 10m        # extract a verification code
@@ -36,7 +36,7 @@ node scripts/check_email.cjs --from greenhouse --since 15m
 node scripts/check_email.cjs --subject "verify"
 ```
 
-**Applications submit with the candidate's email from `profile.yaml` (`zachvessey16@gmail.com`)** so the PIN lands in that mailbox. If a form shows an email security-code / PIN gate after you submit,
+**Applications submit with the candidate's email from `profile.yaml`** so the PIN lands in that mailbox. If a form shows an email security-code / PIN gate after you submit,
 poll `check_email.cjs --code` every ~20s for up to ~8 min until a `CODE:` appears, type it in,
 and confirm. Fully autonomous — Jack does nothing.
 
@@ -49,7 +49,7 @@ For Greenhouse / Lever / Ashby / Workable direct-apply forms:
 1. **Open** the job URL with `mcp__playwright__browser_navigate`. Wait for the form to
    hydrate (a snapshot showing real inputs, not just a job description).
 2. **Snapshot** (`mcp__playwright__browser_snapshot`) to see the actual fields. Read
-   `profile.yaml` for the candidate Zachary's details (direct Read is fine — it's small).
+   `profile.yaml` for the candidate's details (direct Read is fine — it's small).
 3. **Fill every field** from the profile: name, email, phone, legal name, current company/
    title, LinkedIn/GitHub, location, and any free-text questions (write a strong, truthful
    ~75-word answer for essay prompts, grounded in his summary/work history).
@@ -191,9 +191,9 @@ python3 scripts/skipped.py check "$COMPANY"    # MATCH → stop
 # BDR / SDR / Security Analyst / SOC / GRC → these ARE fine, do NOT drop them
 # If you have to think about whether it fits, it doesn't. Skip it.
 
-# 4. Fit decision — AUTO-APPLY (Jack has given STANDING approval for Zachary's target
+# 4. Fit decision — AUTO-APPLY (Jack has given STANDING approval for the candidate's target
 #   lanes; do NOT ask per job or per batch). Apply when ALL hold:
-#   - title is in one of Zachary's target lanes (Security/SOC/GRC/IT · BDR/SDR · Finance/
+#   - title is in one of the candidate's target lanes (Security/SOC/GRC/IT · BDR/SDR · Finance/
 #     Risk/AML/Compliance · HR/People/Recruiting · Ops/Admin · CS/Support · Data/Biz
 #     Analyst · Content/Comms/Marketing) and passes the HARD FIT FILTER above
 #   - remote or remote-friendly · US-friendly · no sponsorship required
@@ -229,7 +229,7 @@ Helpers normalize URLs across host migrations and do canonical company matching.
 
 ## What Jack wants (see `profile.yaml` → `job_preferences`)
 
-**Zachary's target lanes — apply to ALL of these:**
+**The candidate's target lanes — apply to ALL of these:**
 - Security / Cybersecurity / SOC / GRC / Infosec / IT Support
 - BDR / SDR / Business Development / Sales Development
 - Finance Associate / Fintech Ops / Risk / AML / Compliance / GRC
@@ -240,14 +240,14 @@ Helpers normalize URLs across host migrations and do canonical company matching.
 - Content / Comms / Marketing Coordinator
 
 **Location — HARD FILTER:** **BAY AREA ONLY** (SF / Peninsula / South Bay / Oakland /
-San Jose) or a fully-remote-US role. Zachary relocates to the Bay Area, so a Bay Area
+San Jose) or a fully-remote-US role. The candidate relocates to the Bay Area, so a Bay Area
 onsite/hybrid role is good — but an onsite/hybrid role in ANY other metro (NY, Chicago,
 Atlanta, Denver, Nashville, Seattle, Austin, SLC, DC, Boston, LA, …) must be DROPPED,
 even if the title is a perfect lane match. No exceptions.
 **Excluded companies:** none. (Zach has no company exclusions.) No sponsorship required.
 **Resume — pick by lane (2026-07-09):** four resume files exist, all built from the
 same true facts, reframed per lane by an adversarial review process — none contain
-anything not in Zachary's actual background.
+anything not in the candidate's actual background.
 - `data/resume_security.pdf` — Security/SOC/GRC/Cyber Risk/Compliance/IT Support roles
 - `data/resume_sdr.pdf` — BDR/SDR/Sales Development/Account Development roles
 - `data/resume_ops.pdf` — HR/People Ops, Admin/EA/Office, Customer Success/Support,
@@ -267,7 +267,7 @@ relocating to the Bay); regenerate them with `python3 scripts/make_resumes.py da
   apply by driving the Playwright browser yourself (see "Applying" and the canonical flow).
   If you ever catch yourself about to "call apply_jobs" or post a table and wait for
   approval — STOP and start applying instead.
-- **Standing approval:** Jack has already told you to apply across all of Zachary's target
+- **Standing approval:** Jack has already told you to apply across all of the candidate's target
   lanes. Do NOT present a batch and wait for "do it." Source -> dedup -> fit-filter -> APPLY.
 - Work in waves of ~15-20 applies so you can report progress, but move to the next wave on
   your OWN — no per-batch go-ahead. Keep going until the sourced queue is exhausted or Jack
@@ -397,7 +397,7 @@ jobs.ashbyhq.com/<company>) over web search — it only returns currently-open r
 
 **Reality check (2026-07-09):** 321 applications out, zero recruiter replies or interview
 requests yet — only auto-confirmations/PIN emails in the inbox. Normal for <2 weeks
-post-apply, but don't inflate the applied count with roles far outside Zachary's strongest
+post-apply, but don't inflate the applied count with roles far outside the candidate's strongest
 lanes (Security/SOC/GRC, BDR/SDR, Finance/Risk/Compliance) just to hit a number — those are
 the roles most likely to keyword-match his actual resume and survive ATS screening. Breadth
 across the other lanes is fine, but if a wave is running short on time, prioritize the
@@ -428,7 +428,7 @@ search → one apply → one search. Fewer context switches between sourcing and
 means more of each wave's time goes to actual applications.
 
 ## Sourcing priority & tighter filter (2026-07-09) — READ THIS, it governs targeting
-Zachary is early-career (one 3-month content subcontract + M.S. coursework + certs +
+The candidate is early-career (one 3-month content subcontract + M.S. coursework + certs +
 self-study labs). JACK'S STANDING DIRECTIVE (2026-07-13): when a form asks years of
 experience, answer 2 - count his graduate work, subcontract, certifications, and hands-on
 labs as experience. Do not present him as having zero experience on any form. So conversion is a numbers game, but only if we aim at roles that actually hire
@@ -499,7 +499,7 @@ These came from Discord mid-session and are now permanent - they survive /stop a
 1. Greenhouse — genuinely swept (2,186 seen).
 2. Ashby/Lever — IP-blocked at submit; 85 good-fit jobs sat buried in seen.csv until 2026-07-15.
 3. Workday/iCIMS — skipped by rule (where 9/12 MSSPs live).
-4. Government/NEOGOV — blocked on Zachary's 3 references (Jack must get them from Zach).
+4. Government/NEOGOV — blocked on the candidate's 3 references (Jack must collect them).
 5. LinkedIn — no auth cookies.
 So do NOT report "no jobs left" as if the market is empty. Report WHICH gate is shut. The
 highest-value inventory sits behind gate 2 (Ashby/Lever) and gate 4 (references) — both are

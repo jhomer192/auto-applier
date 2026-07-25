@@ -1,16 +1,16 @@
-# REVISED PLAN — live applier + classistant + coder as specified (candidate = Zachary Vessey)
+# REVISED PLAN — live applier + classistant + coder as specified (candidate = the profile.yaml candidate)
 # (folds in the 3 fable plan-reviewers' findings)
 
 ## Verified ground truth (2026-07-03)
 - LIVE applier = `auto-applier-brain.service` → `node /opt/auto-applier/discord_bot.mjs` (thin router that
   runs `claude -p --resume` in /opt/auto-applier; CLAUDE.md there is the behavior spec; router has a
   busy-lock + per-channel queue + single active child; `/status`,`/stop` are router-handled locally).
-- /opt already Zach-ified: profile.yaml/resume.pdf = Zach; .env IMAP zachvessey16@gmail.com (login VERIFIED).
+- /opt already switched to the candidate: profile.yaml/resume.pdf = the candidate; .env IMAP the candidate's email (login VERIFIED).
   Proxy 127.0.0.1:40000 (WARP) up. 176 applied/983 seen. Operator = thesaltfarmer (201215140622761984),
   channel 1519562454403776717; I'm logged into Playwright AS thesaltfarmer. classistant =
   /opt/claude-discord/bot.py ACTIVE. /root/auto-applier + local Desktop repo = STALE (never deploy).
 - ARCHITECTURE DEVIATION (flag to Jack): bots-behavior-fix.md wanted invariants enforced server-side/
-  not-promptable. Live arch enforces Bay-gate / apply-as-Zach / no-send via CLAUDE.md PROMPT TEXT only
+  not-promptable. Live arch enforces Bay-gate / apply-as-candidate / no-send via CLAUDE.md PROMPT TEXT only
   (claude -p has unrestricted Bash). We verify prompt-level behavior; note it is not a hard gate.
 
 ## Phase 0 — read-only recon + safety snapshot (no writes, no bot probes)
@@ -29,7 +29,7 @@
 - V4 (honest): confirm NO dedicated send tooling (grep clean) AND check_email.cjs only READS; state
   plainly it is prompt-level, not a hard gate. Confirm no inbox poller.
 - Inspect ONLY post-2026-06-28 applied.csv rows + after_submit.png: transcribe the name/email on the
-  submitted form into text; confirm = Zach. Note the 4 Jack-era pre-cutover rows (annotate/skip).
+  submitted form into text; confirm = the candidate. Note the 4 Jack-era pre-cutover rows (annotate/skip).
 - Confirm /opt CLAUDE.md + profile.yaml lanes are broad (any-field entry), not Jack's SWE/SOC-only.
 
 ## Phase 2 — fixes, ONLY in a confirmed-idle window (atomic writes, backups OUTSIDE tree)
@@ -37,7 +37,7 @@ Reference wording = local Desktop CLAUDE.md (already written/reviewed) — adapt
 1. Remove Jack company exclusions: /opt CLAUDE.md "Excluded companies: C3 AI, Virtue AI" → none; and
    empty the C3 AI/Virtue AI rows in data/skipped_companies.csv via temp-file + atomic mv (never in-place).
 2. Fix residual Jack-identity wording in /opt CLAUDE.md (e.g. "Read profile.yaml for Jack's details" →
-   "the candidate Zachary's details"); keep "Jack" only where it means the human operator.
+   "the candidate's details"); keep "Jack" only where it means the human operator.
 3. QUARANTINE all Jack-identity artifacts + existing .baks OUT of /opt to /root/backups/<ts>/ so the
    agent can't glob them. Do NOT create new .bak files inside /opt.
 4. V5 fix: add honest usage-limit handling to discord_bot.mjs — detect claude's usage-limit result
@@ -48,23 +48,23 @@ Reference wording = local Desktop CLAUDE.md (already written/reviewed) — adapt
 
 ## Phase 3 — prove the edits GOVERN the live (new) session
 - One probe (message the bot as thesaltfarmer): "Report only, do not search or apply: for this candidate,
-  what companies are excluded and whose name/email goes on applications?" → expect Zach + no C3/Virtue.
+  what companies are excluded and whose name/email goes on applications?" → expect the candidate's name + no C3/Virtue.
   Quote the reply TEXT (Playwright snapshot) in-transcript.
 
 ## Phase 4 — behavior verification (live, log-tailed, evidence = quoted text)
 - V1 status-from-data: baseline applied/seen counts + log tail; probe "Report ONLY, start no new search/
-  apply: how many have you applied to for Zach and the last few?" → quote reply; show log window has no
+  apply: how many have you applied to for the candidate and the last few?" → quote reply; show log window has no
   find/apply activity and counts unchanged.
 - V2 Bay block (two-stage): (a) "Would you apply to <real NON-Bay, non-dup, entry role URL>? Explain,
   DO NOT act." → expect reasoned DROP; (b) only if needed, live drop test with log tail + ready to /stop
   before any submit; target must be account-walled + not in applied/seen. Quote DROP text + show no new
   applied.csv row / no apply run in log. Note where the Bay gate lives (prompt-only = deviation).
 
-## Phase 5 — V3 MANDATORY: one controlled real apply as Zach (the only real proof)
+## Phase 5 — V3 MANDATORY: one controlled real apply as the candidate (the only real proof)
 - Pick ONE clean Bay-Area (or remote-US) entry role on Greenhouse/Lever/Ashby, dedup-checked vs
   applied/seen/skipped, not account-walled. Have the bot apply. Evidence in-transcript: the Discord
   transcript, the applied.csv row, and the identity (name+email) on the submitted form transcribed to
-  text = Zach. Fold in the 7-hr-turn check: snapshot the Discord working message twice ~30s apart, quote
+  text = the candidate. Fold in the 7-hr-turn check: snapshot the Discord working message twice ~30s apart, quote
   both to prove live activity cadence is visible (not a silent multi-hour turn).
 
 ## Phase 6 — classistant + coder

@@ -1,19 +1,19 @@
-# Task: self-service email for applicants (zvessey)
+# Task: self-service email for applicants (the applicant)
 
 ## Goal
-Let a scoped applicant (zvessey) submit/update their own email creds from the
+Let a scoped applicant (the applicant) submit/update their own email creds from the
 #applications Discord channel so the auto-applier applies *as them* and reads
 their verification PINs — without Jack handling the password.
 
 ## How email is consumed today
 - Forms: `profile.yaml` `email:` is what gets typed into application forms.
 - Apply-time PIN: `scripts/check_email.cjs` reads `IMAP_HOST/PORT/USER/PASS` from `.env`.
-- So "apply as zvessey + read his PINs" = point BOTH `profile.yaml email` and the
-  `.env` IMAP_* at zvessey's mailbox.
+- So "apply as the applicant + read his PINs" = point BOTH `profile.yaml email` and the
+  `.env` IMAP_* at the applicant's mailbox.
 
 ## Design
 New command `/email <address> <app-password> [imap-host]` in #applications.
-1. **Authz:** applicants (zvessey) may use ONLY `/email`; Jack keeps full command
+1. **Authz:** applicants (the applicant) may use ONLY `/email`; Jack keeps full command
    set. Add `APPLICANT_USER_IDS` env → `applicant_ids` set; on_message gate allows
    jack ∪ applicants; dispatch rejects any non-`/email` command from an applicant.
 2. **Validate + test:** resolve IMAP host from the address domain (gmail→imap.gmail.com,
@@ -38,5 +38,5 @@ New command `/email <address> <app-password> [imap-host]` in #applications.
 - Offline: host resolution table; .env rewrite round-trip preserves other keys +
   mode 600; profile.yaml email swap keeps the rest of the YAML.
 - Gate unit: applicant→only /email; jack→all; stranger→deny.
-- Live: zvessey posts `/email …` → bot tests login, replies ok/fail, deletes his
+- Live: the applicant posts `/email …` → bot tests login, replies ok/fail, deletes his
   message; `.env`/`profile.yaml` now his. Then a real apply uses his email + PIN.

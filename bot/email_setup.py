@@ -1,6 +1,6 @@
 """Self-service email setup for applicants.
 
-Lets a scoped applicant (e.g. zvessey) register their own mailbox so the applier
+Lets a scoped applicant register their own mailbox so the applier
 applies *as them* and reads their verification PINs:
   - `profile.yaml`'s `email:` (typed into application forms), and
   - `.env`'s IMAP_USER/IMAP_PASS/IMAP_HOST/IMAP_PORT (read by scripts/check_email.cjs

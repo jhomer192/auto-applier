@@ -37,9 +37,9 @@ invariants are reused unchanged — only the Python chat state machine is replac
 - Memory per channel (Agent SDK session) so it can answer "why'd you stop?" truthfully.
 - INVARIANTS PRESERVED (enforced inside the tools, not the prompt):
   - Bay-Area-only (`bay_area.is_bay_area` + `BAY_AREA_RULE`).
-  - Applies as the candidate in profile.yaml/resume.pdf (Zachary), never Jack.
+  - Applies as the candidate in profile.yaml/resume.pdf (the candidate), never Jack.
   - NO email send path; only the apply-time PIN reader. On-demand only — no pollers.
-  - Scoped-applicant gate (zvessey may talk to it; only in #applications).
+  - Scoped-applicant gate (the applicant may talk to it; only in #applications).
 - Delete the dead Python scaffolding it replaces (telegram_bot state machine, the
   command table, transport shims) — git history keeps it. No stubs.
 
@@ -66,12 +66,12 @@ invariants are reused unchanged — only the Python chat state machine is replac
 
 ## Verification (live, via Playwright Discord, as Jack)
 - Applier: "did you apply to all of them?" → it ANSWERS from the DB (no new hunt).
-  "find + apply to bay area SOC jobs" → finds + applies as Zach. A non-Bay job → BLOCKED.
+  "find + apply to bay area SOC jobs" → finds + applies as the candidate. A non-Bay job → BLOCKED.
   Force a usage-limit path → it pauses honestly.
 - classistant: ask it to read #applications history → it uses the new tool. Vent at it →
   it reads the room, doesn't spawn work or ping coder.
 - coder: @coder ping → real reply, no init error.
-- Confirm invariants: no email-send path reachable; applies go out as Zachary; Bay-only.
+- Confirm invariants: no email-send path reachable; applies go out as the candidate; Bay-only.
 
 ## Repos / deploy
 - `auto-applier` (solo → commit to main, author Jack alone): Parts 1.
