@@ -29,9 +29,19 @@ single source of truth.
    reads them there), regenerate the four PDFs, confirm byte-identical content.
 4. Commit + push.
 
-## Out of scope — needs Jack's call
-Scrubbing HEAD does not remove anything from git history. The name and email
-remain in every historical commit and stay reachable on GitHub. Two options:
-- flip the repo private (instant, reversible, no history rewrite), or
-- rewrite history + force-push (destructive, invalidates clones/forks).
-Do not do either without asking.
+## Git history — DECIDED 2026-07-25: leave as-is
+Scrubbing HEAD does not remove anything from history; the name and email stay
+in commits back to 2026-07-05. Jack's call was to leave it, and the exposure is
+genuinely small:
+- `profile.yaml`, `.env`, `make_resumes.py` and the resume PDFs were NEVER
+  committed — phone, LinkedIn and home city were never exposed at all.
+- Only the name and email were ever tracked, and the candidate publishes both
+  himself on his own public site.
+- Zero forks, zero stars: nobody holds a copy.
+
+If that ever changes, the options are a private flip (instant, reversible) or
+`git filter-repo --replace-text` + force-push (needs a GitHub support ticket to
+purge commits still reachable by SHA).
+
+## Status: DONE
+All four PDFs regenerate byte-identical to before the refactor.
