@@ -16,3 +16,6 @@ package-lock.json
 profile.yaml
 profile.*.yaml
 resume*.pdf
+# Embeds the full resume text, phone and email — same PII class as profile.yaml.
+# Lives on the VPS at /opt/auto-applier/scripts/ (not a git repo).
+scripts/make_resumes.py
