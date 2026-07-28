@@ -45,7 +45,69 @@ const ALLOWED = new Set(
 )
 if (ALLOWED.size === 0) console.warn('WARN: DISCORD_ALLOWED_USER_IDS unset — will respond to everyone')
 
-const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID ?? null
+// ── Candidates: one Discord channel = one applicant = one workspace ──────────
+// APPLIERS="<channelId>:<dir>,<channelId>:<dir>"
+//
+// The transport is shared; everything that makes an application specific to a person
+// lives in their own directory: CLAUDE.md (the brain), profile.yaml (identity), .env
+// (their mailbox credentials), .mcp.json + browser profile, scripts/ and data/. A turn
+// spawns `claude` with cwd = that directory, so a session can only ever see one
+// candidate's files — which is what keeps two people's applications from crossing.
+//
+// Falls back to the old single-candidate layout (DISCORD_CHANNEL_ID + this directory)
+// when APPLIERS is unset, so an older env file still boots.
+function parseEnvFile(path) {
+  const out = {}
+  try {
+    for (const line of readFileSync(path, 'utf8').split('\n')) {
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
+      if (m) out[m[1]] = m[2].trim()
+    }
+  } catch { /* no .env for this candidate — fine */ }
+  return out
+}
+
+function candidateName(dir) {
+  try {
+    const m = readFileSync(join(dir, 'profile.yaml'), 'utf8').match(/^name:\s*(.+)$/m)
+    if (m) return m[1].trim()
+  } catch { /* no profile yet */ }
+  return dir.split('/').pop()
+}
+
+function loadCandidates() {
+  const map = new Map()
+  const spec = (process.env.APPLIERS ?? '').trim()
+  if (!spec) {
+    const chId = process.env.DISCORD_CHANNEL_ID
+    if (chId) map.set(chId, { channelId: chId, dir: __dirname, name: candidateName(__dirname), env: {} })
+    return map
+  }
+  for (const entry of spec.split(',')) {
+    const s = entry.trim()
+    if (!s) continue
+    const i = s.indexOf(':')
+    const channelId = s.slice(0, i).trim()
+    const dir = s.slice(i + 1).trim()
+    if (!channelId || !dir) { console.error(`Bad APPLIERS entry: ${s}`); continue }
+    if (!existsSync(join(dir, 'CLAUDE.md'))) {
+      console.error(`Candidate dir has no CLAUDE.md, skipping: ${dir}`)
+      continue
+    }
+    // Their .env wins over the hub's for anything they define — above all IMAP_*, so
+    // each candidate's verification codes are read from their OWN mailbox.
+    map.set(channelId, { channelId, dir, name: candidateName(dir), env: parseEnvFile(join(dir, '.env')) })
+  }
+  return map
+}
+
+const CANDIDATES = loadCandidates()
+if (CANDIDATES.size === 0) {
+  console.error('No candidates configured — set APPLIERS="<channelId>:<dir>,…" in .env')
+  process.exit(1)
+}
+
+const candidateFor = (channelId) => CANDIDATES.get(channelId) ?? null
 
 // Peer Claude bots (e.g. classistant) whose messages count as instructions —
 // so "pass it to the applier" handoffs actually land instead of being ignored.
@@ -85,11 +147,18 @@ const sessions = loadSessions()   // { [channelId]: sessionId }
 // continues immediately in the new session. Per-JOB resets were considered and
 // rejected: each fresh session re-reads CLAUDE.md + profile before acting, and throws
 // away the form-handling patterns that make later applies in a wave much faster.
-const SESSION_RESET_FLAG = join(__dirname, 'data', 'session_reset.flag')
+// The flag lives in the CANDIDATE's data dir, because `wave.py end` writes it from
+// the brain's own cwd — one shared flag would let one candidate's wave boundary reset
+// the other candidate's session.
+const resetFlagFor = (channelId) => {
+  const cand = candidateFor(channelId)
+  return join(cand?.dir ?? __dirname, 'data', 'session_reset.flag')
+}
 
 function consumeSessionReset(channelId) {
-  if (!existsSync(SESSION_RESET_FLAG)) return false
-  try { unlinkSync(SESSION_RESET_FLAG) } catch { /* already gone — fine */ }
+  const flag = resetFlagFor(channelId)
+  if (!existsSync(flag)) return false
+  try { unlinkSync(flag) } catch { /* already gone — fine */ }
   delete sessions[channelId]
   saveSessions(sessions)
   return true
@@ -99,7 +168,7 @@ function clearSession(channelId) {
   const had = Boolean(sessions[channelId])
   delete sessions[channelId]
   saveSessions(sessions)
-  try { if (existsSync(SESSION_RESET_FLAG)) unlinkSync(SESSION_RESET_FLAG) } catch { /* fine */ }
+  try { const f = resetFlagFor(channelId); if (existsSync(f)) unlinkSync(f) } catch { /* fine */ }
   return had
 }
 
@@ -267,6 +336,7 @@ function runClaude(prompt, channelId, onActivity, onMilestone) {
     logLine(`WAVE RESET: starting a fresh session for channel=${channelId}`)
   }
   const existingSession = sessions[channelId]
+  const cand = candidateFor(channelId)
 
   return new Promise((resolve) => {
     const args = [
@@ -274,7 +344,7 @@ function runClaude(prompt, channelId, onActivity, onMilestone) {
       '--output-format', 'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
-      '--mcp-config', join(__dirname, '.mcp.json'),
+      '--mcp-config', join(cand.dir, '.mcp.json'),
       '--strict-mcp-config',
     ]
 
@@ -287,9 +357,12 @@ function runClaude(prompt, channelId, onActivity, onMilestone) {
 
     args.push(prompt)
 
+    // cwd decides which CLAUDE.md, profile.yaml, scripts/ and data/ the session sees;
+    // the candidate's own .env supplies their mailbox credentials. This is the whole
+    // separation boundary between two applicants sharing one bot.
     const child = spawn('claude', args, {
-      cwd: __dirname,
-      env: { ...process.env },
+      cwd: cand.dir,
+      env: { ...process.env, ...cand.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -415,7 +488,10 @@ async function sendChunked(channel, text, replyToMsg = null) {
 }
 
 // ── Message handler ──────────────────────────────────────────────────────────
-let busy = false
+// One turn in flight PER CHANNEL, not per process: two candidates apply at the same
+// time, while a second message for the same candidate still waits its turn (their
+// session is single-threaded by definition). Ordering within a channel is preserved.
+const busy = new Set()   // channelIds with a turn in flight
 const queue = []
 
 async function handleMessage(item) {
@@ -426,10 +502,11 @@ async function handleMessage(item) {
     ?? await client.channels.fetch(item.channelId).catch(() => null)
   if (!channel) {
     // Transient Discord hiccup: don't eat the item (a synthetic resume would be
-    // lost forever) — put it back and retry in 30s.
+    // lost forever) — put it back and retry in 30s. The retry is marked on the ITEM
+    // rather than pausing the process, so one candidate's hiccup can't stall the other.
     logLine(`NO_CHANNEL ${item.channelId} — requeued, retrying in 30s`)
+    item.notBefore = Date.now() + 30_000
     queue.unshift(item)
-    pausedUntil = Math.max(pausedUntil, Date.now() + 30_000)
     setTimeout(processQueue, 31_000)
     return
   }
@@ -490,28 +567,40 @@ async function handleMessage(item) {
   logLine(`REPLY ${body.length} chars in ${secs}s | session=${sessionId?.slice(0, 8)}${limitedAt ? ' | LIMITED' : ''}`)
 }
 
-async function processQueue() {
-  if (busy || queue.length === 0 || Date.now() < pausedUntil) return
-  busy = true
-  const item = queue.shift()
-  try { await handleMessage(item) } catch (e) { logLine('HANDLE_ERR ' + e.message) }
-  busy = false
-  processQueue()
+function processQueue() {
+  if (Date.now() < pausedUntil) return
+  const now = Date.now()
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i]
+    if (busy.has(item.channelId)) continue           // that candidate is mid-turn
+    if (item.notBefore && item.notBefore > now) continue  // requeued, not due yet
+    queue.splice(i, 1)
+    i--
+    busy.add(item.channelId)
+    handleMessage(item)
+      .catch(e => logLine('HANDLE_ERR ' + e.message))
+      .finally(() => { busy.delete(item.channelId); processQueue() })
+  }
 }
 
 // ── Slash commands (handled immediately, never queued) ───────────────────────
-const HELP = [
-  '**Auto-applier commands**',
-  '`/stop` (or `/cancel`) — interrupt the current turn and drop anything queued',
-  '`/status` — is it running, how long, how many queued',
-  '`/fresh` — clear my context; the next message starts a fresh session (CSVs untouched)',
-  '`/help` — this message',
-  '',
-  'Otherwise just talk to me — I apply autonomously across Zach\'s target lanes,',
-  'surface every action live, and you can `/stop` at any time.',
-  'If I hit the Claude usage limit I pause and auto-resume when it resets —',
-  'anything you send meanwhile queues up and runs in order.',
-].join('\n')
+const helpText = (channelId) => {
+  const cand = candidateFor(channelId)
+  return [
+    `**Auto-applier — this channel applies for ${cand?.name ?? 'the configured candidate'}**`,
+    '`/stop` (or `/cancel`) — interrupt the current turn and drop anything queued',
+    '`/status` — is it running, how long, how many queued',
+    '`/fresh` — clear my context; the next message starts a fresh session (CSVs untouched)',
+    '`/who` — which candidate, workspace and application email this channel uses',
+    '`/help` — this message',
+    '',
+    `Otherwise just talk to me — I apply autonomously across ${cand?.name ?? 'their'} target lanes,`,
+    'surface every action live, and you can `/stop` at any time.',
+    'Each candidate channel runs independently, so another channel working does not block this one.',
+    'If I hit the Claude usage limit I pause and auto-resume when it resets —',
+    'anything you send meanwhile queues up and runs in order.',
+  ].join('\n')
+}
 
 async function handleCommand(msg, cmd) {
   if (cmd === '/stop' || cmd === '/cancel' || cmd === '/halt') {
@@ -527,14 +616,32 @@ async function handleCommand(msg, cmd) {
     return true
   }
   if (cmd === '/status') {
-    const running = active.has(msg.channelId)
+    const running = active.has(msg.channelId) || busy.has(msg.channelId)
     const sess = sessions[msg.channelId]
     const paused = Date.now() < pausedUntil
+    const cand = candidateFor(msg.channelId)
     const state = paused ? `⏸ paused (usage limit) — resumes ${fmtWhen(pausedUntil)}` : running ? '🟢 running' : '⚪️ idle'
-    const statusText = `${state} · queued: ${queue.filter(m => m.channelId === msg.channelId).length}` +
-      (sess ? ` · session \`${sess.slice(0, 8)}…\`` : '')
+    // Other candidates' state, so "is anything else eating the box right now?" is answerable.
+    const others = [...busy].filter(c => c !== msg.channelId)
+      .map(c => candidateFor(c)?.name ?? c)
+    const statusText = `**${cand?.name ?? 'unknown'}** — ${state} · queued: ${queue.filter(m => m.channelId === msg.channelId).length}` +
+      (sess ? ` · session \`${sess.slice(0, 8)}…\`` : '') +
+      (others.length ? `\nalso running: ${others.join(', ')}` : '')
     trackOwnText(statusText)
     await msg.channel.send(statusText).catch(() => {})
+    return true
+  }
+  if (cmd === '/who') {
+    const cand = candidateFor(msg.channelId)
+    const whoText = cand
+      ? [`**${cand.name}**`,
+         `workspace: \`${cand.dir}\``,
+         `application email: ${cand.env.IMAP_USER || '(none configured)'}`,
+         `mailbox reading (verification codes): ${cand.env.IMAP_PASS ? 'enabled' : 'OFF — no password set'}`,
+        ].join('\n')
+      : 'This channel is not mapped to a candidate.'
+    trackOwnText(whoText)
+    await msg.channel.send(whoText).catch(() => {})
     return true
   }
   if (cmd === '/fresh' || cmd === '/newsession') {
@@ -548,8 +655,9 @@ async function handleCommand(msg, cmd) {
     return true
   }
   if (cmd === '/help') {
-    trackOwnText(HELP)
-    await msg.channel.send(HELP).catch(() => {})
+    const h = helpText(msg.channelId)
+    trackOwnText(h)
+    await msg.channel.send(h).catch(() => {})
     return true
   }
   return false
@@ -567,7 +675,10 @@ const client = new Client({
 
 client.once('ready', async () => {
   const activeSessions = Object.keys(sessions).length
-  logLine(`Bot ready: ${client.user.tag} | channel=${CHANNEL_ID ?? 'any'} | allowlist=${ALLOWED.size || 'OFF'} | active_sessions=${activeSessions}`)
+  logLine(`Bot ready: ${client.user.tag} | candidates=${CANDIDATES.size} | allowlist=${ALLOWED.size || 'OFF'} | active_sessions=${activeSessions}`)
+  for (const c of CANDIDATES.values()) {
+    logLine(`  candidate: ${c.name} | channel=${c.channelId} | dir=${c.dir} | email=${c.env.IMAP_USER || 'none'} | mailbox=${c.env.IMAP_PASS ? 'on' : 'off'}`)
+  }
 
   // Finalize working messages orphaned by a restart instead of leaving them
   // frozen at "🔧 working — …" forever.
@@ -596,7 +707,8 @@ client.once('ready', async () => {
 
 client.on('messageCreate', async (msg) => {
   if (msg.author.id === client.user?.id) return
-  if (CHANNEL_ID && msg.channelId !== CHANNEL_ID) return
+  // Fail closed: a channel with no candidate mapping is not ours to answer in.
+  if (!candidateFor(msg.channelId)) return
 
   // Peer Claude bots (classistant relays) may hand work off; other bots are ignored.
   const isPeer = msg.author.bot && PEER_BOTS.has(msg.author.id)
@@ -628,7 +740,7 @@ client.on('messageCreate', async (msg) => {
     const queuedText = `⏸ queued (#${queue.length}) — paused for the Claude usage limit, auto-resumes ${fmtWhen(pausedUntil)}.`
     trackOwnText(queuedText)
     msg.reply(queuedText).catch(() => {})
-  } else if (busy || active.size > 0) {
+  } else if (busy.has(msg.channelId)) {
     msg.react('⏳').catch(() => {})
   }
   processQueue()
