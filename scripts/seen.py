@@ -6,7 +6,7 @@ others shouldn't be re-investigated next scan unless something changed. This
 script keeps the "we've seen this URL" set out of the bot's context.
 
     python scripts/seen.py check <url>
-    python scripts/seen.py mark  <url> <company> <title>
+    python scripts/seen.py mark  <url> <company> <title> [location]
     python scripts/seen.py count
 """
 from __future__ import annotations
@@ -20,14 +20,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from url_norm import normalize as _normalize_url  # noqa: E402
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "seen.csv"
-HEADER = ["first_seen", "url", "company", "title"]
+# `location` was added 2026-08-09. Rows written before that carry none, and source.py
+# --backlog treats a missing one as "unknown" and lets verify_rows() fetch the real
+# location from the ATS instead. Appending the column rather than rewriting history
+# keeps every existing row readable by csv.DictReader.
+HEADER = ["first_seen", "url", "company", "title", "location"]
 
 
 def _ensure_csv() -> None:
+    """Create the file, and widen a pre-`location` header in place if it is still there.
+
+    Without this the 4-column header stays and every new 5-field row spills its location
+    into DictReader's restkey, where nothing can read it. Only the header line changes —
+    the 4,300 existing rows are left exactly as they are and simply read back with an
+    empty location, which is what source.py --backlog already expects.
+    """
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CSV_PATH.exists():
         with CSV_PATH.open("w", newline="") as f:
             csv.writer(f).writerow(HEADER)
+        return
+    with CSV_PATH.open(newline="") as f:
+        rows = list(csv.reader(f))
+    if rows and rows[0] != HEADER and rows[0][:4] == HEADER[:4]:
+        rows[0] = HEADER
+        tmp = CSV_PATH.with_suffix(".csv.tmp")
+        with tmp.open("w", newline="") as f:
+            csv.writer(f).writerows(rows)
+        tmp.replace(CSV_PATH)
 
 
 def cmd_check(query: str) -> int:
@@ -49,11 +69,12 @@ def cmd_check(query: str) -> int:
 
 def cmd_mark(args: list[str]) -> int:
     if len(args) < 1:
-        print("usage: seen.py mark <url> [company] [title]")
+        print("usage: seen.py mark <url> [company] [title] [location]")
         return 2
     url = args[0]
     company = args[1] if len(args) > 1 else ""
     title = args[2] if len(args) > 2 else ""
+    location = args[3] if len(args) > 3 else ""
     _ensure_csv()
     # dedup on normalized URL
     norm = _normalize_url(url)
@@ -65,7 +86,7 @@ def cmd_mark(args: list[str]) -> int:
     with CSV_PATH.open("a", newline="") as f:
         csv.writer(f).writerow([
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            url, company, title,
+            url, company, title, location,
         ])
     print("OK marked")
     return 0

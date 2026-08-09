@@ -344,7 +344,17 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(source, "ROTATION_PATH", tmp_path / "board_rotation.csv")
     for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH"):
         monkeypatch.setattr(source, attr, tmp_path / f"{attr.lower()}.missing")
+    monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "verify_cache.json")
     monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    # Every row served now goes through verify_rows(), which asks the employer's ATS
+    # whether the posting is still open. These tests invent their postings, so the real
+    # check answers 404 for all of them and every assertion below sees an empty wave.
+    # Stub the single-posting lookup, not verify_rows itself: the per-company cap, the
+    # dedup and the hit-crediting under test all run around it, and a test that skipped
+    # verification wholesale would stop covering them. Tests that care about the
+    # verification rules patch this again themselves.
+    monkeypatch.setattr(source, "_verify_one",
+                        lambda url: {"alive": True, "location": None, "years": None})
     return tmp_path
 
 
@@ -550,3 +560,146 @@ def test_outer_ring_bay_area(location, expected):
 def test_investigations_lane(title):
     """His degree is criminology; these titles previously matched no lane at all."""
     assert classify(title, None) == "security"
+
+
+# --- serving-path filters added 2026-08-09 ------------------------------------
+# 887 attempted applications produced 162 submissions. 74% of everything a wave opened
+# in a browser was thrown away, and 89% of those rejects — wrong location, closed,
+# too senior — were knowable from the ATS API before the page was ever loaded.
+
+@pytest.mark.parametrize("url,platform", [
+    ("https://job-boards.greenhouse.io/grin/jobs/4555260005", "greenhouse"),
+    ("https://grin.co/careers/jobs/?gh_jid=4555260005", "greenhouse"),
+    ("https://jobs.lever.co/shieldai/d3f3a93f", "lever"),
+    ("https://jobs.ashbyhq.com/traba/17f1440c", "ashby"),
+    ("https://revgen.breezy.hr/p/6e425918c9ba-sdr", "breezy"),
+    ("https://apply.workable.com/foo/j/ABC/", "workable"),
+    ("https://jobs.smartrecruiters.com/VulcanCyberInc/743999694586151", "smartrecruiters"),
+    ("https://acme.wd1.myworkdayjobs.com/en-US/careers/job/x", "workday"),
+    ("https://careers-acme.icims.com/jobs/1234/x/job", "icims"),
+    ("https://www.linkedin.com/jobs/view/123", "linkedin"),
+    ("https://careers.salesforce.com/en/jobs/jr325892/sdr/", "other"),
+])
+def test_platform_of(url, platform):
+    assert source.platform_of(url) == platform
+
+
+@pytest.mark.parametrize("platform", ["workable", "smartrecruiters", "workday",
+                                      "icims", "linkedin"])
+def test_submit_blocked_platforms(platform):
+    """0 of 147 Workable jobs and 0 of 7 SmartRecruiters ones ever became applications."""
+    assert platform in source.SUBMIT_BLOCKED
+
+
+@pytest.mark.parametrize("platform", ["greenhouse", "lever", "breezy", "ashby"])
+def test_platforms_that_convert_are_still_served(platform):
+    """Ashby is weak (13 of 239) but not zero, so it sorts last rather than dropping."""
+    assert platform not in source.SUBMIT_BLOCKED
+
+
+@pytest.mark.parametrize("title", [
+    "SDR - Atlanta GA not Bay Area",
+    "Data Analyst - requires 2+ years experience, SQL proficiency",
+    "People Operations - too senior (5+ yrs)",
+    "Entry Level SDR - NC residency required",
+    "Cybersecurity Analyst - 3-5 yrs + clearance required",
+    "Business Operations Associate - LinkedIn required",
+    "SDR SmartRecruiters HARD-AVOID",
+])
+def test_reject_note_is_a_verdict_not_a_title(title):
+    """A wave already opened these and wrote down why they were a no."""
+    assert source.REJECT_NOTE_RE.search(title)
+
+
+@pytest.mark.parametrize("title", [
+    "Sales Development Representative", "Security Analyst",
+    "Associate GRC Cybersecurity", "Trust & Safety Agent 2026 New Grad",
+    "Inside Sales Representative", "SOC Analyst Tier 1",
+])
+def test_reject_note_leaves_real_titles_alone(title):
+    """Zero of the 896 rows in applied.csv match this pattern."""
+    assert not source.REJECT_NOTE_RE.search(title)
+
+
+@pytest.mark.parametrize("title,pinned", [
+    ("BDR Texas Colorado", True),          # no comma, so the ", XX" rule never saw it
+    ("SDR - Austin, TX", True),
+    ("BDR - Pennsylvania only", True),
+    ("Outside Sales Representative - Central Valley, CA", True),
+    ("Sales Development Representative", False),
+    ("Security Analyst - San Francisco, CA", False),
+    ("Compliance Analyst, California", False),
+    ("Inside Sales Representative, MM (PAM)", False),   # MM is not a state
+    ("Analyst, AI", False),
+])
+def test_names_other_state_reads_spelled_out_states(title, pinned):
+    assert source._names_other_state(title) is pinned
+
+
+def _row(url="https://job-boards.greenhouse.io/x/jobs/1", title="SDR"):
+    return {"url": url, "title": title, "company": "X", "location": "?"}
+
+
+def test_verify_drops_a_closed_posting(monkeypatch, tmp_path):
+    monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "c.json")
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(source, "_verify_one",
+                        lambda url: {"alive": False, "reason": "posting 404"})
+    assert source.verify_rows([_row()], 1, 4) == []
+
+
+def test_verify_drops_an_out_of_band_posting(monkeypatch, tmp_path):
+    monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "c.json")
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(source, "_verify_one",
+                        lambda url: {"alive": True, "location": "Remote, US", "years": 5})
+    assert source.verify_rows([_row()], 1, 4) == []
+    # ...and the same posting survives once the ceiling is lifted.
+    assert len(source.verify_rows([_row()], 1, 0)) == 1
+
+
+def test_verify_fails_open_when_the_ats_is_unreachable(monkeypatch, tmp_path):
+    """A timeout must never cost a live job. Only an explicit 404/410 is fatal."""
+    monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "c.json")
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(source, "_verify_one",
+                        lambda url: {"alive": True, "location": None, "years": None})
+    kept = source.verify_rows([_row()], 1, 4)
+    assert len(kept) == 1 and kept[0]["location"] == "?"
+
+
+def test_verify_stops_as_soon_as_it_has_enough(monkeypatch, tmp_path):
+    """A healthy queue costs only as many ATS requests as it actually serves."""
+    monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "c.json")
+    monkeypatch.setattr(source.time, "sleep", lambda *_: None)
+    seen_urls = []
+
+    def spy(url):
+        seen_urls.append(url)
+        return {"alive": True, "location": "Remote, US", "years": None}
+
+    monkeypatch.setattr(source, "_verify_one", spy)
+    rows = [_row(f"https://job-boards.greenhouse.io/x/jobs/{i}") for i in range(50)]
+    assert len(source.verify_rows(rows, 3, 4)) == 3
+    assert len(seen_urls) < 20, "checked far more postings than it served"
+
+
+def test_verify_disabled_passes_rows_through(monkeypatch):
+    """--no-verify, for when the ATS is down and raw rows beat no rows."""
+    def explode(url):
+        raise AssertionError("--no-verify must not touch the network")
+
+    monkeypatch.setattr(source, "_verify_one", explode)
+    rows = [_row(f"https://job-boards.greenhouse.io/x/jobs/{i}") for i in range(5)]
+    assert source.verify_rows(rows, 2, 4, enabled=False) == rows[:2]
+
+
+@pytest.mark.parametrize("text,years", [
+    ("We need 5+ years of experience in security", 5),
+    ("2+ years required, 5+ preferred", 2),          # the MINIMUM, never the maximum
+    ("3-5 years experience with SQL", 3),
+    ("No experience necessary", None),
+    ("Founded in 2019, 100 years of combined leadership", None),
+])
+def test_min_years_required(text, years):
+    assert source._min_years_required(text) == years
