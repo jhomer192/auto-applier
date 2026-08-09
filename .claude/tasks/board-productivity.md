@@ -39,6 +39,25 @@ Zero, twice. Three causes, in order of size:
    an application that landed is a hit by definition, whereas seen.csv rows are
    surfaced-not-served and have no denominator at all.
 
+## Shipped + verified 2026-08-09 (commit e4c3ece)
+
+- 219 pytest pass (was 208), +11 covering the barren rule both ways, the
+  posts round-trip, a rotation file with no `posts` column, posts crediting
+  through a real `main()` run, `board_of` over every ATS URL shape, seeding's
+  never-overwrite and idempotence, and that a seeded board outranks an unmined one.
+- Seeder run on the live file: 896 applied rows -> 459 producing boards, 432 of
+  them in the pool, **430 seeded**, 2 left alone for having real history.
+  board_rotation.csv 200 -> 630 rows. Backup at `.csv.bak-seed`.
+- Simulated against the live state: picking 1,500 boards now lands **140 of the
+  427** known-productive boards, against ~80 for a uniform draw. That is only
+  1.75x because staleness is currently uniform (nothing has a `last_mined`) and
+  the productivity multiplier is capped at 2.25x. It widens to ~9x by itself once
+  barren boards earn the 0.25x floor — no retune needed, and the cap was left
+  alone deliberately.
+- Live 60-board mine on the VPS: posts credited on all 60 (1,666 postings), and
+  the rule caught its first board on the first opportunity —
+  `PRUNED greenhouse:feverup barren posts=587 hits=0`.
+
 ## Not doing
 
 - No sweep of all 8,163 boards to pre-classify them barren. That is a mining
