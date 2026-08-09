@@ -8,6 +8,7 @@ that let genuinely unreachable jobs through.
 """
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 
@@ -703,3 +704,103 @@ def test_verify_disabled_passes_rows_through(monkeypatch):
 ])
 def test_min_years_required(text, years):
     assert source._min_years_required(text) == years
+
+
+# --- barren boards + rotation seeding ----------------------------------------
+def test_barren_board_is_dropped_from_the_pool():
+    """Past BARREN_POSTS with no lifetime hit is an employer in another market."""
+    assert source._is_live({"posts": source.BARREN_POSTS, "hits": 0}) is False
+
+
+def test_a_barren_board_that_ever_produced_is_kept_forever():
+    """hits never decays, so one matching posting is a permanent exemption. Without
+    this a big employer whose Bay roles are all already in seen.csv gets deleted."""
+    assert source._is_live({"posts": 99999, "hits": 1}) is True
+
+
+def test_a_small_board_with_nothing_is_not_barren():
+    """The median board returns 8-10 postings. Empty weeks are normal; staleness
+    floats them back up. Only p99 volume with zero lifetime hits is disqualifying."""
+    assert source._is_live({"posts": source.BARREN_POSTS - 1, "hits": 0}) is True
+
+
+def test_rotation_round_trips_posts(sandbox):
+    source.save_rotation({("greenhouse", "alpha"):
+                          {"last_mined": "", "mines": 2, "hits": 1, "fails": 0, "posts": 37}})
+    assert source.load_rotation()[("greenhouse", "alpha")]["posts"] == 37
+
+
+def test_rotation_without_a_posts_column_still_loads(sandbox):
+    """The live file predates the column; a missing value must read as 0, not crash."""
+    source.ROTATION_PATH.write_text(
+        "platform,token,last_mined,mines,hits,fails\ngreenhouse,alpha,,3,1,0\n")
+    assert source.load_rotation()[("greenhouse", "alpha")]["posts"] == 0
+
+
+def test_mining_credits_posts(sandbox, monkeypatch):
+    monkeypatch.setattr(source, "_fetch_once", lambda p, t: [
+        {"url": f"https://x/{t}/{i}", "title": "Groomer", "location": "Ohio"}
+        for i in range(5)])
+    source.main(["source.py", "--n", "5", "--boards", "3", "--no-verify"])
+    rows = _rotation_rows(sandbox)
+    assert all(int(r["posts"]) == 5 for r in rows.values()), rows
+
+
+def test_board_of_reads_every_ats_url_shape():
+    from seed_rotation import board_of
+    cases = {
+        "https://boards.greenhouse.io/verkada/jobs/1234": ("greenhouse", "verkada"),
+        "https://job-boards.greenhouse.io/figma/jobs/99": ("greenhouse", "figma"),
+        "https://boards.greenhouse.io/embed/job_app?for=brex&token=7": ("greenhouse", "brex"),
+        "https://jobs.lever.co/hive/abc-def": ("lever", "hive"),
+        "https://jobs.ashbyhq.com/ramp/xyz": ("ashby", "ramp"),
+        "https://acme.breezy.hr/p/12345": ("breezy", "acme"),
+        "https://www.brex.com/careers/role": None,
+    }
+    for url, want in cases.items():
+        assert board_of(url) == want, url
+
+
+def test_seeding_never_overwrites_real_history(sandbox):
+    import seed_rotation
+    source.save_rotation({("greenhouse", "alpha"):
+                          {"last_mined": "2026-08-01", "mines": 9, "hits": 0,
+                           "fails": 0, "posts": 12}})
+    source.APPLIED_PATH.write_text(
+        "url\nhttps://boards.greenhouse.io/alpha/jobs/1\n"
+        "https://boards.greenhouse.io/beta/jobs/2\n")
+    seed_rotation.main(["seed_rotation.py", "--write"])
+    rows = _rotation_rows(sandbox)
+    assert int(rows[("greenhouse", "alpha")]["mines"]) == 9   # untouched
+    assert int(rows[("greenhouse", "alpha")]["hits"]) == 0
+    assert int(rows[("greenhouse", "beta")]["hits"]) == 1     # seeded
+    assert int(rows[("greenhouse", "beta")]["mines"]) == seed_rotation.SEED_MINES
+
+
+def test_seeding_is_idempotent(sandbox):
+    import seed_rotation
+    source.APPLIED_PATH.write_text(
+        "url\nhttps://jobs.lever.co/gamma/1\nhttps://jobs.lever.co/gamma/2\n")
+    seed_rotation.main(["seed_rotation.py", "--write"])
+    first = _rotation_rows(sandbox)[("lever", "gamma")]
+    seed_rotation.main(["seed_rotation.py", "--write"])
+    assert _rotation_rows(sandbox)[("lever", "gamma")] == first
+
+
+def test_seeding_ignores_boards_that_are_not_in_the_pool(sandbox):
+    import seed_rotation
+    source.APPLIED_PATH.write_text("url\nhttps://boards.greenhouse.io/notinpool/jobs/1\n")
+    seed_rotation.main(["seed_rotation.py", "--write"])
+    assert ("greenhouse", "notinpool") not in _rotation_rows(sandbox)
+
+
+def test_seeded_boards_outrank_never_mined_ones(sandbox):
+    """The whole point: a board that has produced beats a coin flip from the pool."""
+    seeded = source.pick_boards.__globals__  # noqa: F841 - readability only
+    state = {("greenhouse", "alpha"): {"last_mined": "", "mines": 4, "hits": 4,
+                                       "fails": 0, "posts": 0}}
+    pool = [("greenhouse", "alpha"), ("greenhouse", "beta")]
+    random.seed(0)
+    wins = sum(source.pick_boards(pool, state, 1)[0] == ("greenhouse", "alpha")
+               for _ in range(400))
+    assert wins > 280, wins   # x2.25 productivity over an unmined board

@@ -142,7 +142,14 @@ PLATFORM_CONVERSION = {
     "ashby": 0.25,
     "workable": 0.10,
 }
-ROTATION_HEADER = ["platform", "token", "last_mined", "mines", "hits", "fails"]
+ROTATION_HEADER = ["platform", "token", "last_mined", "mines", "hits", "fails", "posts"]
+# A board that has returned this many postings across every mine it has ever had, and
+# never once surfaced a job in ANY lane, is not an employer in his market. Measured
+# 2026-08-09 over 796 randomly sampled boards: median board returns 8-10 postings and
+# p90 is 65, so 400 is deep in the tail — it catches exactly the franchise and staffing
+# megaboards (svetness 4,975, veterinaryemergencygroupst 1,108, plscareers 780) that
+# were 41.7% of all fetch volume and 0% of all supply.
+BARREN_POSTS = 400
 DEAD_AFTER = 4  # consecutive fetch failures before a board is dropped from rotation
 
 # --- lanes -------------------------------------------------------------------
@@ -464,6 +471,7 @@ def load_rotation() -> dict[tuple[str, str], dict]:
                     "mines": int(row.get("mines") or 0),
                     "hits": int(row.get("hits") or 0),
                     "fails": int(row.get("fails") or 0),
+                    "posts": int(row.get("posts") or 0),
                 }
     return state
 
@@ -493,7 +501,8 @@ def save_rotation(state: dict[tuple[str, str], dict], keep: set | None = None) -
         w = csv.writer(f)
         w.writerow(ROTATION_HEADER)
         for (platform, token), v in sorted(state.items()):
-            w.writerow([platform, token, v["last_mined"], v.get("mines", 0), v["hits"], v["fails"]])
+            w.writerow([platform, token, v["last_mined"], v.get("mines", 0), v["hits"],
+                        v["fails"], v.get("posts", 0)])
     os.replace(tmp, ROTATION_PATH)
 
 
@@ -528,7 +537,15 @@ def _is_live(s: dict) -> bool:
     never fetched, so `fails` can never reset to 0. A four-wave outage — or the 406
     throttling storm that prompted the ok/missing/throttled split — would delete a
     healthy board from the pool forever, with only a `pruned=N` count to show for it.
+
+    Barren boards get no such amnesty, and want none: a board past BARREN_POSTS with
+    zero lifetime hits is not transiently broken, it is an employer in another market.
+    `hits` never decays, so `hits == 0` means it has never surfaced a job in any lane
+    across every mine it has ever had — one matching posting, ever, exempts it forever.
+    --stats names every pruned board, so this is never a silent disappearance.
     """
+    if s.get("posts", 0) >= BARREN_POSTS and not s.get("hits", 0):
+        return False
     if s.get("fails", 0) < DEAD_AFTER:
         return True
     return _age_hours(s.get("last_mined", "")) > 24 * 30
@@ -1314,7 +1331,10 @@ def main(argv: list[str]) -> int:
         print(f"pool={len(pool)} live={len(live)} never_mined={len(never)} pruned={len(dead)}")
         for b in dead:  # name them — a silent prune is indistinguishable from a bug
             s = state.get(b, {})
-            print(f"  PRUNED {b[0]}:{b[1]}  fails={s.get('fails', 0)} "
+            why = ("barren" if s.get("posts", 0) >= BARREN_POSTS and not s.get("hits", 0)
+                   else "dead")
+            print(f"  PRUNED {b[0]}:{b[1]}  {why}  fails={s.get('fails', 0)} "
+                  f"posts={s.get('posts', 0)} hits={s.get('hits', 0)} "
                   f"last_mined={s.get('last_mined') or 'never'}")
         ranked = sorted(live, key=lambda b: -_age_hours(state.get(b, {}).get("last_mined", "")))
         for b in ranked[:15]:
@@ -1359,7 +1379,8 @@ def main(argv: list[str]) -> int:
     rows, ok_boards, dead_boards, throttled_boards = [], 0, 0, 0
 
     for board, postings, status in results:
-        entry = state.setdefault(board, {"last_mined": "", "mines": 0, "hits": 0, "fails": 0})
+        entry = state.setdefault(
+            board, {"last_mined": "", "mines": 0, "hits": 0, "fails": 0, "posts": 0})
         if status == "throttled":
             # The API refused us; the board is not implicated. Leave state untouched so
             # this costs the board neither a `fails` tick nor its staleness — it should
@@ -1373,6 +1394,9 @@ def main(argv: list[str]) -> int:
         entry["fails"] = 0
         entry["last_mined"] = now
         entry["mines"] = entry.get("mines", 0) + 1
+        # Volume, so _is_live() can tell a small board that happens to have nothing this
+        # week from a 5,000-posting franchise chain that has never had anything at all.
+        entry["posts"] = entry.get("posts", 0) + len(postings)
         ok_boards += 1
         if board[1].lower() in blocked:
             continue
