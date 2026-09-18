@@ -10,3 +10,5 @@
 - After changing CLAUDE.md or wave_prompt.txt, clear the channel's session in /opt/applier-hub/data/discord_sessions.json before the next wave — a RESUMEd session keeps the pre-change context and will not re-read the manual.
 - applied.py's lane argument must be the QUEUE lane, not the résumé that went out: an IT-support role applied to with the security résumé logs as lane=security and inflates the cyber share.
 - Tell the résumé writer to name tools exactly as CANDIDATE FACTS names them; an invented parenthetical ("Wazuh (endpoint security/SIEM)") is what the Haiku QC gate rejects, and two rejections drop the apply to the untailored base résumé.
+- Breezy does not 404 a closed posting: the page answers 200 saying "this position has been closed", so _alive() passes it. The board's /json drops closed postings, so absence from the listing is the liveness signal — check the board, not the page.
+- applied.py check only reads applied.csv (wins), so a posting skipped for fit can be re-queued and judged the other way hours later. check now also reports a prior skipped/blocked outcome from apply_events.jsonl.

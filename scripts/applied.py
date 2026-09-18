@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from url_norm import normalize as _normalize_url  # noqa: E402
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "applied.csv"
 TAILOR_LOG = Path(__file__).resolve().parent.parent / "data" / "tailor_log.csv"
 RESUME = Path(__file__).resolve().parent.parent / "data" / "resume_tailored.pdf"
+EVENTS = Path(__file__).resolve().parent.parent / "data" / "apply_events.jsonl"
 HEADER = ["date_applied", "url", "company", "title", "platform", "status", "notes"]
 
 
@@ -89,6 +91,39 @@ def _iter_rows() -> Iterable[Row]:
             yield Row.from_dict(d)
 
 
+def _prior_judgment(norm_url: str | None) -> str:
+    """A fit-skip this wave has already made, for a URL applied.csv cannot know about.
+
+    applied.csv records wins, so a posting skipped for fit leaves no mark there and can be
+    re-queued from the backlog hours later and judged the other way. That happened on the
+    first live cyber wave: a Roblox req was skipped at 21:47 for "4+ years, CL9 senior",
+    then applied to at 22:47. The attempt log is the only place that decision survives, so
+    check is where it has to surface.
+    """
+    if not norm_url or not EVENTS.exists():
+        return ""
+    hit = None
+    for line in EVENTS.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("outcome") not in ("skipped", "blocked"):
+            continue
+        url = e.get("url") or ""
+        if url and _normalize_url(url) == norm_url:
+            hit = e   # last word wins
+    if not hit:
+        return ""
+    return (f"PRIOR {hit['outcome']}: {hit.get('ts', '')}  {hit.get('company', '')}  "
+            f"{hit.get('title', '')}  reason: {hit.get('block_reason') or 'none recorded'}\n"
+            "  You already judged this posting. Apply anyway ONLY if that reason is wrong; "
+            "otherwise move on.")
+
+
 def cmd_check(query: str) -> int:
     q = query.strip()
     if not q:
@@ -110,7 +145,8 @@ def cmd_check(query: str) -> int:
                 matches.append(row)
                 continue
     if not matches:
-        print("NONE")
+        prior = _prior_judgment(norm_q) if is_url else ""
+        print(prior or "NONE")
         return 0
     print(f"MATCH: {len(matches)}")
     for r in matches[:5]:

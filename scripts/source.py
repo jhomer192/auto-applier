@@ -918,6 +918,51 @@ def _save_verify_cache(cache: dict) -> None:
         pass
 
 
+_BREEZY_BOARDS: dict[str, dict | None] = {}
+
+
+def _breezy_verify(url: str) -> dict | None:
+    """Verify a breezy posting against its board listing, or None if not breezy.
+
+    Breezy does NOT 404 a closed posting: the page answers 200 and says "this position
+    has been closed", so _alive() passes it and the brain spends a browser load finding
+    out. Measured on the first live cyber wave, which opened four such pages in 45
+    seconds (Ceresti Health, Sourcefit, Continued, Zero Hash — all first seen 2026-08-01).
+    The board's own /json is authoritative and drops closed postings, so absence from it
+    is the liveness signal. One request per board, cached for the run.
+    """
+    p = urllib.parse.urlsplit(url)
+    host = p.netloc.lower()
+    if not host.endswith("breezy.hr"):
+        return None
+    token = host.split(".")[0]
+    job_id = p.path.strip("/").split("/")[-1]
+    if not token or not job_id:
+        return None
+    if token not in _BREEZY_BOARDS:
+        try:
+            _BREEZY_BOARDS[token] = {"jobs": _get(f"https://{token}.breezy.hr/json")}
+        except Exception:  # noqa: BLE001 — transport noise says nothing about the posting
+            _BREEZY_BOARDS[token] = None
+    board = _BREEZY_BOARDS[token]
+    if board is None:
+        return {"alive": True, "location": None, "years": None, "reason": ""}
+    for j in board["jobs"]:
+        if job_id not in (j.get("url") or "") and job_id != str(j.get("id") or ""):
+            continue
+        loc = j.get("location") or {}
+        bits = [loc.get("city"), (loc.get("state") or {}).get("name"),
+                (loc.get("country") or {}).get("name")]
+        where = ", ".join(b for b in bits if b) or (loc.get("name") or "")
+        if loc.get("is_remote"):
+            where = f"Remote, {where}" if where else "Remote"
+        return {"alive": True, "location": where or None,
+                "years": _min_years_required(_strip_html(j.get("description", "") or "")),
+                "reason": ""}
+    return {"alive": False, "location": None, "years": None,
+            "reason": "gone from the breezy board listing"}
+
+
 def _verify_one(url: str) -> dict:
     """{alive, location, years, reason} for one posting, from the ATS API where possible.
 
@@ -925,6 +970,9 @@ def _verify_one(url: str) -> dict:
     null location, so a bad minute on the API can never delete a live job. Only an
     explicit 404/410, a redirect off the posting, or a deadline in the past is fatal.
     """
+    breezy = _breezy_verify(url)
+    if breezy is not None:
+        return breezy
     api = _posting_api(url)
     if not api:
         return {"alive": _alive(url), "location": None, "years": None, "reason": ""}
