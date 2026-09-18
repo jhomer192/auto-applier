@@ -31,6 +31,13 @@ a wave with applications that can never land. Pass --platforms to override.
 
 Pool lives in scripts/companies.txt (`platform:token`) — ~2,100 verified-live boards.
 Add companies there; never hardcode them here.
+
+RUN scripts/search_jobs.py FIRST (Jack, 2026-09-18). Now that the lanes are cyber + IT
+support only, a pool sample is the wrong primary source: most boards have no cyber
+opening on any given day, so a pool-first wave reports the market exhausted while real
+postings sit one search away. search_jobs.py starts from the TITLE, finds the employer,
+probes that board and appends it here — so this pool is a cache of what search has
+already turned up, and this script is the TOP-UP for a wave search left short.
 """
 from __future__ import annotations
 
@@ -143,14 +150,27 @@ PLATFORM_CONVERSION = {
     "workable": 0.10,
 }
 ROTATION_HEADER = ["platform", "token", "last_mined", "mines", "hits", "fails", "posts"]
-# A board that has returned this many postings across every mine it has ever had, and
-# never once surfaced a job in ANY lane, is not an employer in his market. Measured
-# 2026-08-09 over 796 randomly sampled boards: median board returns 8-10 postings and
-# p90 is 65, so 400 is deep in the tail — it catches exactly the franchise and staffing
-# megaboards (svetness 4,975, veterinaryemergencygroupst 1,108, plscareers 780) that
-# were 41.7% of all fetch volume and 0% of all supply.
-BARREN_POSTS = 400
+# A board that returns this many postings PER MINE, and never once surfaced a job in
+# ANY lane, is not an employer in his market. Measured 2026-08-09 over 796 randomly
+# sampled boards: median board returns 8-10 postings per mine and p90 is 65, so 200 is
+# deep in the tail — it catches exactly the franchise and staffing megaboards (svetness
+# 4,979/mine, plscareers 776/mine) that were 41.7% of all fetch volume and 0% of all
+# supply.
+#
+# 2026-09-04: this was previously compared against the CUMULATIVE `posts` counter, which
+# `mine()` increments every single mine. The 400 threshold was calibrated on per-mine
+# size but applied to a lifetime total, so an ordinary 9-postings-per-mine board crossed
+# it after ~44 mines and was pruned forever. It ran backwards — the more active an
+# employer, the faster it died (9/mine died in 44 mines; a near-dead 1/mine board
+# survived 324). It was deleting 75% of the pool (6,412 of 8,511 boards) and is the
+# cause of the "800 boards -> 31,687 postings -> 0 servable" collapse.
+BARREN_PER_MINE = 200
 DEAD_AFTER = 4  # consecutive fetch failures before a board is dropped from rotation
+
+
+def _posts_per_mine(s: dict) -> float:
+    """Average postings returned per mine. `posts` is cumulative, `mines` is the count."""
+    return s.get("posts", 0) / max(s.get("mines", 0), 1)
 
 # --- lanes -------------------------------------------------------------------
 # Ordered by conversion odds for a zero-experience candidate (see CLAUDE.md
@@ -162,7 +182,7 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         "information security", "infosec", "security operations", "threat",
         "incident response", "vulnerability", "compliance analyst", "risk analyst",
         "security compliance", "trust and safety", "trust & safety",
-        # Security-consultancy titles. Zach applied to three Coalfire FedRAMP roles on
+        # Security-consultancy titles. The candidate applied to three Coalfire FedRAMP roles on
         # 2026-07-19 that source.py couldn't see — it found them only by browsing the
         # board directly. These are squarely in-lane for a CompTIA-certified candidate.
         "fedramp", "soc 2", "iso 27001", "security assessment", "security consultant",
@@ -177,49 +197,41 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
         "investigator", "investigations", "loss prevention", "background screen",
         "due diligence", "sanctions", "anti-money laundering", "financial crime",
         "case investigator", "claims investigator", "physical security",
+        # Federal / compliance / audit vocabulary (Jack, 2026-09-18). None of this
+        # matched before, which is most of why only 112 of 707 tailored applications
+        # went out in this lane: an "IT Audit Analyst (SOX)", an "ISSO", or a "Security
+        # Controls Assessor" req was simply invisible to the sourcer.
+        "rmf", "risk management framework", "authorization to operate", "emass",
+        "nist 800-53", "800-171", "fisma", "cmmc", "isso", "issm",
+        "security controls assessor", "controls assessor",
+        "systems security officer", "information system security",
+        "assessment and authorization", "sox", "itgc", "it audit",
+        "internal controls", "audit readiness", "soc 1",
+        "third party risk", "third-party risk", "tprm", "vendor risk",
+        "privacy analyst", "insider threat", "siem", "splunk",
+        "cyber defense", "security assurance", "security governance", "cloud security",
     )),
-    "sdr": (1, (
-        "sales development", "business development representative", "bdr", "sdr",
-        "account development", "sales representative", "inside sales",
-        "market development representative",
-    )),
+    # The ONLY feeder lane left (Jack, 2026-09-18). Help desk -> SOC is a real path;
+    # sdr/people/finance/cs/ops/analyst/content were deleted outright. They were not
+    # ranked below security, they were competing with it: 370 sdr + 225 ops applications
+    # against 112 security, because the cyber supply is thin in any single wave and the
+    # other lanes always had something to fill the queue with.
     "it": (2, (
         "it support", "help desk", "helpdesk", "service desk", "desktop support",
         "technical support", "it specialist", "it associate", "systems support",
     )),
-    "people": (2, (
-        "recruiting coordinator", "recruiting associate", "talent coordinator",
-        "people operations", "people coordinator", "hr coordinator", "hr associate",
-        "onboarding specialist",
-    )),
-    "finance": (3, (
-        "finance associate", "financial analyst", "risk operations", "aml",
-        "fraud analyst", "fraud operations", "payments operations", "kyc",
-        "compliance associate", "billing", "accounts payable", "accounts receivable",
-        "fraud", "payroll", "deal desk", "underwriting assistant",
-    )),
-    "cs": (3, (
-        "customer success", "customer support", "customer experience",
-        "client services", "support specialist", "support associate",
-        "implementation", "onboarding associate",
-        "customer service", "client onboarding", "renewals", "member services",
-    )),
-    "ops": (3, (
-        "operations associate", "operations coordinator", "business operations",
-        "office coordinator", "office manager", "administrative assistant",
-        "administrative coordinator", "program coordinator", "project coordinator",
-        "operations specialist", "order management", "logistics coordinator",
-        "logistics associate", "revenue operations", "sales operations",
-    )),
-    "analyst": (4, (
-        "data analyst", "business analyst", "reporting analyst", "operations analyst",
-        "business systems analyst",
-    )),
-    "content": (4, (
-        "content", "communications", "marketing coordinator", "marketing associate",
-        "social media", "copywriter",
-    )),
 }
+
+
+def _tier(lane: str) -> int:
+    """Tier for a lane, tolerating a lane that is no longer a target.
+
+    Every lane in the pipeline comes from classify(), so it is always a current one — but
+    seen.csv/retry.csv are full of `sdr`/`ops` rows from the 1,227 applications sent
+    before the cyber-only narrowing, and a bare LANES[lane] anywhere those strings reach
+    would raise KeyError and kill the whole run rather than drop one row.
+    """
+    return LANES.get(lane, (99, ()))[0]
 
 # Substring kill-list — seniority he can't reach, and technical ICs needing a coding
 # interview. Mirrors the HARD FIT FILTER in CLAUDE.md; keep the two in sync.
@@ -231,7 +243,7 @@ LANES: dict[str, tuple[int, tuple[str, ...]]] = {
 #     "Account Executive - New Grad", and "Assistant Account Executive" (the entry rank
 #     in PR). Narrowed to the specific quota titles.
 #   - the contract/temp family is GONE. profile.yaml's own excluded_title_keywords are
-#     only senior/staff/principal/lead/manager/director, and Zach's own resume lists
+#     only senior/staff/principal/lead/manager/director, and the candidate's own resume lists
 #     "Cybersecurity Content Consultant (Subcontractor)" — he has done contract work.
 #     It was killing "Recruiting Coordinator (Contract)" at Vercel and Mainspring,
 #     which are among the highest-conversion openings a zero-experience candidate gets.
@@ -254,7 +266,11 @@ EXCLUDE = (
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
     "counsel", "attorney", "paralegal", "legal", "nurse", "clinical", "physician",
-    "pharmac", "cpa", "tax ", "audit", "accountant", "phd",
+    "pharmac", "cpa", "tax ", "accountant", "phd",
+    # Bare "audit" used to live on the line above and was killing the whole SOX/ITGC/
+    # IT-audit family, which is squarely in-lane for a GRC candidate (Jack, 2026-09-18).
+    # Narrowed to the accounting-side titles; "cpa"/"tax "/"accountant" still stand.
+    "financial statement audit", "external audit", "audit senior",
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
     "work at home", "work from home", "data entry",
     "expression of interest", "talent pool", "talent community", "general application",
@@ -262,11 +278,12 @@ EXCLUDE = (
     # Geographic restriction spelled out in the title rather than the location, e.g.
     # "Sales Representative (Central Midwest Candidates Only)" filed under "United States".
     "candidates only", "residents only", "must reside in", "must be located in",
-    # Roles gated on an ALREADY-ACTIVE clearance. profile.yaml records none, and a
-    # clearance takes months and a sponsoring employer — so these can't convert.
-    # Delete these four lines if Zach does in fact hold one.
-    "cleared", "clearance", "ts/sci", "polygraph",
-    "tier 3",  # escalation tier — tier 1/2 support stays in-lane
+    # Clearance (Jack, 2026-09-18): "cleared" and "clearance" used to be killed here on
+    # the grounds that the candidate held none. He is now in final adjudication for a
+    # SECRET, so cleared/clearance postings are back in — they are a large share of the
+    # cyber market. What a Secret does NOT reach still stands:
+    "ts/sci", "polygraph", "full scope", "ci poly", "top secret",
+    "tier 3",  # escalation tier — senior by definition; tier 1/2 analyst stays in-lane
 )
 # Support/IT/SecOps titles that legitimately carry the word "engineer". These are
 # exempt from the engineer/developer family below — see the carve-out in classify().
@@ -274,6 +291,20 @@ SUPPORT_SAFE = (
     "technical support", "support engineer", "it support", "help desk", "helpdesk",
     "service desk", "desktop support", "customer support", "customer success",
     "implementation engineer", "security operations", "content developer",
+    # Security titles that carry "engineer" without carrying a coding interview
+    # (Jack, 2026-09-18). CODING_HEAVY below still applies to every one of them.
+    "security engineer", "cloud security", "information security engineer",
+    "compliance engineer", "iam engineer", "identity engineer",
+)
+# Applied to EVERY title, including the SUPPORT_SAFE carve-outs — the carve-out exists
+# to let "Cloud Security Engineer I" through, not to readmit a coding interview. The
+# forward-deployed/solutions/sales-engineer ban lived only in CLAUDE.md prose until now,
+# which is how a wave applied to an xAI Forward Deployed Engineer.
+CODING_HEAVY = (
+    "application security", "appsec", "product security", "detection engineer",
+    "detection and response engineer", "security software", "reverse engineer",
+    "malware", "offensive security", "exploit", "penetration test", "red team",
+    "forward deployed", "solutions engineer", "sales engineer",
 )
 ENGINEER_FAMILY = ("software engineer", "software developer", "developer", "engineer",
                    "engineering")
@@ -538,13 +569,13 @@ def _is_live(s: dict) -> bool:
     throttling storm that prompted the ok/missing/throttled split — would delete a
     healthy board from the pool forever, with only a `pruned=N` count to show for it.
 
-    Barren boards get no such amnesty, and want none: a board past BARREN_POSTS with
+    Barren boards get no such amnesty, and want none: a board past BARREN_PER_MINE with
     zero lifetime hits is not transiently broken, it is an employer in another market.
     `hits` never decays, so `hits == 0` means it has never surfaced a job in any lane
     across every mine it has ever had — one matching posting, ever, exempts it forever.
     --stats names every pruned board, so this is never a silent disappearance.
     """
-    if s.get("posts", 0) >= BARREN_POSTS and not s.get("hits", 0):
+    if _posts_per_mine(s) >= BARREN_PER_MINE and not s.get("hits", 0):
         return False
     if s.get("fails", 0) < DEAD_AFTER:
         return True
@@ -596,6 +627,8 @@ def classify(title: str, lane_filter: str | None) -> str | None:
     # City), "Security Operations Engineer" (Pure Storage). 24 real postings per
     # 900-board sweep. Support titles are exempt from the engineer/developer family
     # only — every other exclusion still applies to them.
+    if any(x in t for x in CODING_HEAVY):
+        return None
     kill = EXCLUDE if not any(s in t for s in SUPPORT_SAFE) else _EXCLUDE_NO_ENG
     if any(x in t for x in kill):
         return None
@@ -1033,7 +1066,7 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
                 n_offsite += 1
                 continue
             seen_urls.add(key)
-            tier = LANES[lane][0]
+            tier = _tier(lane)
             early = any(sig in f" {title.lower()} " for sig in EARLY_SIGNALS)
             rows.append({
                 # Within a tier, the platform that actually converts goes first. Negated
@@ -1048,7 +1081,7 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
     rows.sort(key=lambda r: r["sort"])
     tiers = {}
     for r in rows:
-        tiers[LANES[r["lane"]][0]] = tiers.get(LANES[r["lane"]][0], 0) + 1
+        tiers[_tier(r["lane"])] = tiers.get(_tier(r["lane"]), 0) + 1
     print(f"[source] --backlog: {total} seen, {n_marked} already triaged in their title, "
           f"{n_offsite} pinned to a disallowed location by title, {n_walled} on a platform "
           f"that has never accepted a submit, {len(rows)} never-applied "
@@ -1331,7 +1364,7 @@ def main(argv: list[str]) -> int:
         print(f"pool={len(pool)} live={len(live)} never_mined={len(never)} pruned={len(dead)}")
         for b in dead:  # name them — a silent prune is indistinguishable from a bug
             s = state.get(b, {})
-            why = ("barren" if s.get("posts", 0) >= BARREN_POSTS and not s.get("hits", 0)
+            why = ("barren" if _posts_per_mine(s) >= BARREN_PER_MINE and not s.get("hits", 0)
                    else "dead")
             print(f"  PRUNED {b[0]}:{b[1]}  {why}  fails={s.get('fails', 0)} "
                   f"posts={s.get('posts', 0)} hits={s.get('hits', 0)} "
@@ -1408,7 +1441,7 @@ def main(argv: list[str]) -> int:
             if not lane or not location_ok(p["location"], title, url):
                 continue
             known.add(_norm(url))
-            tier = LANES[lane][0]
+            tier = _tier(lane)
             early = any(s in f" {title.lower()} " for s in EARLY_SIGNALS)
             rows.append({
                 "sort": (tier - (0.5 if early else 0), random.random()),

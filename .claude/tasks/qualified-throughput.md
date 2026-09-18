@@ -1,6 +1,6 @@
 # Raise qualified-application throughput
 
-Goal: more applications per wave to jobs Zach could actually get. No behaviour
+Goal: more applications per wave to jobs the candidate could actually get. No behaviour
 change to *when* the applier runs — it stays off, auto-wave stays disarmed.
 
 Measured baseline (887 logged attempts since 2026-08-04):

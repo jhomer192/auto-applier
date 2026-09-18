@@ -5,7 +5,7 @@ Instead of the bot Reading applied.csv into its context (which grows
 unbounded), the bot calls this script:
 
     python scripts/applied.py check  <url-or-company>
-    python scripts/applied.py record <url> <company> <title> [platform]
+    python scripts/applied.py record <url> <company> <title> [platform] [lane]
     python scripts/applied.py recent [N]
     python scripts/applied.py count
 
@@ -20,6 +20,7 @@ If nothing matches, it prints `NONE`. Bot reads only the result, not the file.
 from __future__ import annotations
 
 import csv
+import hashlib
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,7 +32,31 @@ from company_match import matches as _company_matches  # noqa: E402
 from url_norm import normalize as _normalize_url  # noqa: E402
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "applied.csv"
+TAILOR_LOG = Path(__file__).resolve().parent.parent / "data" / "tailor_log.csv"
+RESUME = Path(__file__).resolve().parent.parent / "data" / "resume_tailored.pdf"
 HEADER = ["date_applied", "url", "company", "title", "platform", "status", "notes"]
+
+
+def _lane_sent() -> str:
+    """Which resume lane this application carried, read off the resume actually uploaded.
+
+    The lane mix is the number the 2026-09-18 cyber pivot has to move (it was sdr 370 /
+    ops 225 / security 112 across 707 tailored resumes), and it was only recoverable by
+    joining tailor_log.csv after the fact because `notes` was empty on all 1,227 rows.
+    Derived rather than passed as a flag: a flag the brain has to remember is a flag that
+    eventually goes unpassed. resume_tailored.pdf is the file it uploads unconditionally,
+    so hashing it here records the lane that was really sent.
+    """
+    try:
+        digest = hashlib.md5(RESUME.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+    try:
+        with TAILOR_LOG.open(encoding="utf-8", newline="") as f:
+            lanes = {r["md5"]: r.get("lane", "") for r in csv.DictReader(f) if r.get("md5")}
+    except (OSError, KeyError, csv.Error):
+        return ""
+    return lanes.get(digest, "")
 
 
 def _ensure_csv() -> None:
@@ -95,10 +120,11 @@ def cmd_check(query: str) -> int:
 
 def cmd_record(args: list[str]) -> int:
     if len(args) < 3:
-        print("usage: applied.py record <url> <company> <title> [platform]")
+        print("usage: applied.py record <url> <company> <title> [platform] [lane]")
         return 2
     url, company, title = args[0], args[1], args[2]
     platform = args[3] if len(args) > 3 else ""
+    lane = args[4] if len(args) > 4 else _lane_sent()
     _ensure_csv()
     row = [
         datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -107,11 +133,11 @@ def cmd_record(args: list[str]) -> int:
         title,
         platform,
         "applied",
-        "",
+        f"lane={lane}" if lane else "",
     ]
     with CSV_PATH.open("a", newline="") as f:
         csv.writer(f).writerow(row)
-    print(f"OK recorded: {company} — {title}")
+    print(f"OK recorded: {company} — {title}" + (f" [lane={lane}]" if lane else ""))
     return 0
 
 

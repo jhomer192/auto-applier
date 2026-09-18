@@ -1,0 +1,33 @@
+# Employers whose boards reliably carry entry-level cyber / GRC / trust-&-safety / IT
+# work. Probed on EVERY search run rather than sampled — unlike companies.txt, which is
+# a rotating pool, this is a short always-checked list. Format: platform:token.
+#
+# Measured 2026-09-18 (77 candidate slugs probed; 36 live, these are the ones that had
+# at least one in-lane posting). `inlane` = titles source.classify() accepts,
+# `fit` = also passing location_ok (Bay Area or fully-remote-US):
+#   anthropic 23 inlane / 22 fit · stripe 20/3 · huntress 9/2 · palantir 8/0
+#   samsara 7/2 · verkada 6/4 · datadog 6/0 · abnormalsecurity 3/2 · coinbase 3/2
+# The list GROWS by itself: every board search_jobs.py finds through a search hit is
+# appended to companies.txt, and any of those that produce cyber roles belong here too.
+greenhouse:abnormalsecurity
+greenhouse:anthropic
+greenhouse:asana
+greenhouse:cloudflare
+greenhouse:coinbase
+greenhouse:datadog
+greenhouse:discord
+greenhouse:elastic
+greenhouse:gitlab
+greenhouse:huntress
+greenhouse:lyft
+greenhouse:netskope
+greenhouse:okta
+greenhouse:roblox
+greenhouse:robinhood
+greenhouse:samsara
+greenhouse:sigmacomputing
+greenhouse:stripe
+greenhouse:verkada
+greenhouse:zscaler
+lever:coalfire
+lever:palantir

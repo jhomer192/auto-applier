@@ -20,7 +20,7 @@ Date: 2026-07-05. Approved by Jack (audit session).
 
 ## 3. Nightly email sweep + action-items sheet
 - `scripts/nightly_sweep.mjs`: runs `claude -p` (same session mechanics, own prompt) to read
-  the last ~48h of BOTH inboxes (Zach's Gmail IMAP + jack@homerfamily.com Netsol IMAP2),
+  the last ~48h of BOTH inboxes (the candidate's Gmail IMAP + jack@homerfamily.com Netsol IMAP2),
   extract action items (recruiter replies, interview requests, "email X by Y"), maintain
   `data/action_items.csv` (date_added,due,who,contact,action,status,source), and post the
   open-items table to the #applications channel via Discord REST (bot token, no gateway).

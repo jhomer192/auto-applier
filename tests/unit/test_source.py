@@ -39,28 +39,75 @@ REJECTED = [
 # page load.
 UNFILTERED_ON_PURPOSE = [
     ("Executive IT Support Specialist", "it"),
-    ("Recruiting Coordinator (Contract)", "people"),
     ("IT Support Specialist II", "it"),
     ("Technical Support Engineer - University Graduate 2026", "it"),
     ("IT Help Desk Engineer", "it"),
     ("Security Operations Engineer", "security"),
-    ("Internal Communications Specialist", "content"),
 ]
 
 # Titles that DID convert to an application on 2026-07-19. Must keep passing.
 APPLIED = [
-    ("Enterprise SDR - NorCal", "sdr"),
-    ("Sales Development Representative - Bay Area", "sdr"),
-    ("Business Development Representative (BDR)", "sdr"),
-    ("Junior Sales Representative (SaaS)", "sdr"),
-    ("Inside Sales Representative", "sdr"),
-    ("Channel BDR", "sdr"),
     ("Compliance Analyst", "security"),
     ("Security Analyst (Security Operations)", "security"),
-    ("PM Administrative Assistant", "ops"),
-    ("Finance Operations Coordinator", "ops"),
-    ("Talent and Operations Coordinator", "ops"),
     ("Technical Support Specialist", "it"),
+]
+
+# Lanes deleted 2026-09-18 (cyber + IT support only). These titles converted to real
+# applications under the old nine-lane set — 370 sdr and 225 ops of 707 tailored resumes,
+# against 112 security and zero cyber interviews. They must now classify to None: the cut
+# is the whole point of the pivot, so a regression here is a regression to a BDR job hunt.
+RETIRED_LANES = [
+    "Enterprise SDR - NorCal",
+    "Sales Development Representative - Bay Area",
+    "Business Development Representative (BDR)",
+    "Junior Sales Representative (SaaS)",
+    "Inside Sales Representative",
+    "Channel BDR",
+    "PM Administrative Assistant",
+    "Finance Operations Coordinator",
+    "Talent and Operations Coordinator",
+    "Recruiting Coordinator (Contract)",
+    "Internal Communications Specialist",
+    "Customer Success Associate",
+    "Data Analyst",
+]
+
+# The cyber vocabulary the kill-list used to eat (2026-09-18). "clearance"/"cleared" and
+# bare "audit" were blanket EXCLUDE entries, and the lane had no RMF/SOX/ISSO words at all,
+# so the exact titles he wants were dropped before they were ever scored.
+CYBER_TARGETS = [
+    "IT Audit Analyst (SOX)",
+    "GRC Analyst I",
+    "Information Systems Security Officer",
+    "Security Controls Assessor",
+    "Cleared SOC Analyst (Remote)",
+    "Cloud Security Analyst",
+    "Third Party Risk Analyst",
+    "IT Compliance Analyst - ITGC",
+    "Cybersecurity Analyst (RMF / eMASS)",
+    "Insider Threat Analyst",
+    "Privacy Analyst",
+]
+
+# Security-titled roles that still hinge on a coding interview, plus the clearances a
+# Secret in adjudication does not cover. source.CODING_HEAVY / EXCLUDE must kill these
+# even though SUPPORT_SAFE now carves out the engineer family for security titles.
+CYBER_NON_TARGETS = [
+    "Application Security Engineer",
+    "AppSec Engineer",
+    "Product Security Engineer",
+    "Detection Engineer",
+    "Malware Reverse Engineer",
+    "Offensive Security Engineer",
+    "Penetration Tester",
+    "Red Team Operator",
+    "Forward Deployed Engineer",
+    "Solutions Engineer",
+    "Sales Engineer",
+    "TS/SCI Poly Cyber Analyst",
+    "Senior GRC Manager",
+    "Tax Accountant",
+    "Financial Statement Audit Associate",
 ]
 
 
@@ -72,6 +119,27 @@ def test_rejected_titles_are_filtered_at_source(title):
 @pytest.mark.parametrize("title,lane", APPLIED)
 def test_applied_titles_still_pass(title, lane):
     assert classify(title, None) == lane
+
+
+@pytest.mark.parametrize("title", RETIRED_LANES)
+def test_retired_lanes_are_dropped(title):
+    assert classify(title, None) is None
+
+
+@pytest.mark.parametrize("title", CYBER_TARGETS)
+def test_cyber_vocabulary_passes(title):
+    assert classify(title, None) == "security"
+
+
+@pytest.mark.parametrize("title", CYBER_NON_TARGETS)
+def test_coding_heavy_and_high_clearance_dropped(title):
+    assert classify(title, None) is None
+
+
+def test_tier_tolerates_a_retired_lane():
+    """seen.csv/retry.csv hold 1,227 rows of sdr/ops lanes; LANES[lane] would KeyError."""
+    assert source._tier("sdr") == 99
+    assert source._tier("security") == 1
 
 
 @pytest.mark.parametrize(
@@ -104,7 +172,7 @@ def test_ambiguous_city_names(location, expected):
 
 def test_foreign_board_bare_remote_is_dropped():
     """A UK entity's "Remote" means remote-in-the-UK. Three such applies went out on
-    2026-07-19; Zach has US work authorization only, so they were unwinnable."""
+    2026-07-19; the candidate has US work authorization only, so they were unwinnable."""
     assert not location_ok(
         "Remote", "Security Analyst",
         "https://job-boards.eu.greenhouse.io/nscaleoperationsukltd/jobs/4921843101",
@@ -317,7 +385,7 @@ def test_dublin_ca_is_not_dublin_ireland():
     ("Colma, CA", True),
 ])
 def test_substring_collisions(location, expected):
-    assert location_ok(location, "Sales Development Representative", "u") is expected
+    assert location_ok(location, "Security Analyst", "u") is expected
 
 
 @pytest.mark.parametrize("title", [
