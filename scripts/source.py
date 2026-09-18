@@ -284,6 +284,10 @@ EXCLUDE = (
     # cyber market. What a Secret does NOT reach still stands:
     "ts/sci", "polygraph", "full scope", "ci poly", "top secret",
     "tier 3",  # escalation tier — senior by definition; tier 1/2 analyst stays in-lane
+    # "compliance analyst" is in-lane vocabulary, but it also matches customs/export
+    # work that has nothing to do with security compliance — the first live cyber wave
+    # queued "Trade Compliance Analyst" at Magnet Forensics off that keyword.
+    "trade compliance", "export compliance", "export control", "customs",
 )
 # Support/IT/SecOps titles that legitimately carry the word "engineer". These are
 # exempt from the engineer/developer family below — see the carve-out in classify().

@@ -275,7 +275,12 @@ python3 scripts/skipped.py check "$COMPANY"    # MATCH → stop
 # 5. Apply by driving the browser (see "Applying" above), then verify the confirmation.
 
 # 6. Record on success
-python3 scripts/applied.py record "$JOB_URL" "$COMPANY" "$TITLE" "<greenhouse|lever|ashby|linkedin>"
+python3 scripts/applied.py record "$JOB_URL" "$COMPANY" "$TITLE" "<greenhouse|lever|ashby|linkedin>" "<security|it>"
+#   The 5th argument is the QUEUE lane the posting was sourced under - the lane that
+#   answers "how much of this wave was cyber". Pass it every time. Left off, the row
+#   falls back to hashing the uploaded PDF, which reports which RESUME went out, not
+#   what the job was: an IT-support role applied to with the security resume then
+#   logs as lane=security and overstates the cyber share.
 ```
 
 When you surface listings without applying, mark them seen:
