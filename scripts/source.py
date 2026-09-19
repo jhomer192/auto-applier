@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import random
 import re
@@ -179,6 +180,9 @@ def _posts_per_mine(s: dict) -> float:
 LANES: dict[str, tuple[int, tuple[str, ...]]] = {
     "security": (1, (
         "security analyst", "soc analyst", "soc ", "cyber", "grc", "governance risk",
+        # The helpdesk-to-SOC titles spelled as a tier. "tier 3" stays killed in
+        # EXCLUDE; tier 1/2 is the rung he is applying for.
+        "tier 1 analyst", "tier 2 analyst", "tier i analyst", "tier ii analyst",
         "information security", "infosec", "security operations", "threat",
         "incident response", "vulnerability", "compliance analyst", "risk analyst",
         "security compliance", "trust and safety", "trust & safety",
@@ -262,6 +266,9 @@ EXCLUDE = (
     # notes in this module's docstring history; duration is not the objection.
     "on call", "on-call", "mailroom", "mail room",
     " iii", " iv", "level 3",
+    # " ii" joins them: every "Engineer II"/"Analyst II" this pipeline has opened stated
+    # 4-5 years. "Tier 1/2 analyst" is a different thing and stays in-lane.
+    " ii ", " ii)", "(ii)", "level 2 engineer",
     "software engineer", "software developer", "developer", "engineer", "engineering",
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
@@ -853,7 +860,13 @@ VERIFY_TTL_H = 24
 # Threshold, not a guess at the ceiling: profile.yaml records no professional experience,
 # and EXCLUDE already lets "Level II" (1-2 years) through on purpose. A posting whose
 # LOWEST stated requirement is 4+ years is out of reach. Raise with --max-years.
-DEFAULT_MAX_YEARS = 4
+# 3, not 4 (Jack, 2026-09-18): the first live cyber wave skipped eleven postings in one
+# hour for seniority, and the brain's reasons name 3+ years as too senior every time
+# ("3+ years required, too senior", "3-5 years hands-on required"). Verify was set one
+# year looser than the brain, so each of those rows was printed, opened in the browser
+# and thrown away at 5-10 minutes apiece. The min-years rule still protects the
+# "2+ required, 5+ preferred" posting: only the smallest number on the page counts.
+DEFAULT_MAX_YEARS = 3
 _YEARS_RE = re.compile(
     r"(\d{1,2})\s*(?:\+|plus|or more)?\s*(?:-|–|to)?\s*(?:\d{1,2})?\s*\+?\s*years?"
     # "2+ years required" and "3 years minimum" name a bar as plainly as "years of
@@ -884,7 +897,16 @@ def _posting_api(url: str) -> tuple[str, str] | None:
 
 
 def _strip_html(raw: str) -> str:
-    return _TAGS_RE.sub(" ", raw or "").replace("&nbsp;", " ")
+    """Markup out, text in - unescaping FIRST.
+
+    Greenhouse serves its `content` html-ESCAPED (&lt;div&gt;...), so stripping tags
+    before unescaping leaves every tag behind as literal text. Measured on a real
+    posting: 20,016 chars of escaped markup vs 9,398 of prose. That matters because
+    _YEARS_RE requires "years" and "experience|required|minimum" within 40 characters
+    of each other, and a "&lt;/span&gt;&lt;span ...&gt;" between them defeats it - which is
+    why the experience-band gate was passing greenhouse postings that state a bar.
+    """
+    return _TAGS_RE.sub(" ", html.unescape(raw or "")).replace("\xa0", " ")
 
 
 def _min_years_required(text: str) -> int | None:

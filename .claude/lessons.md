@@ -12,3 +12,5 @@
 - Tell the résumé writer to name tools exactly as CANDIDATE FACTS names them; an invented parenthetical ("Wazuh (endpoint security/SIEM)") is what the Haiku QC gate rejects, and two rejections drop the apply to the untailored base résumé.
 - Breezy does not 404 a closed posting: the page answers 200 saying "this position has been closed", so _alive() passes it. The board's /json drops closed postings, so absence from the listing is the liveness signal — check the board, not the page.
 - applied.py check only reads applied.csv (wins), so a posting skipped for fit can be re-queued and judged the other way hours later. check now also reports a prior skipped/blocked outcome from apply_events.jsonl.
+- Greenhouse serves job `content` HTML-ESCAPED, so stripping tags before html.unescape leaves the markup as literal text and defeats any regex needing two words near each other — the years gate was silently dead on greenhouse. Unescape first, strip second.
+- Keep verify's --max-years at the same bar the brain judges by. Verify at 4 while the brain calls 3+ too senior means every 3-year posting is printed, opened in a browser and thrown away at 5-10 minutes each.
