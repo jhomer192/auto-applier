@@ -16,6 +16,22 @@ import re
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 
+def _greenhouse_id(p) -> str | None:
+    q = parse_qs(p.query)
+    jid = (q.get("gh_jid") or [""])[0]
+    if jid.isdigit():
+        return jid
+    if "greenhouse.io" not in p.netloc:
+        return None
+    parts = p.path.strip("/").split("/")
+    if parts[-2:-1] == ["jobs"] and parts[-1].isdigit():
+        return parts[-1]
+    tok = (q.get("token") or [""])[0]
+    if "job_app" in parts and tok.isdigit():
+        return tok
+    return None
+
+
 def normalize(url: str) -> str:
     if not url or not isinstance(url, str):
         return ""
@@ -30,6 +46,18 @@ def normalize(url: str) -> str:
     netloc = p.netloc
     path = p.path.rstrip("/")
     query = ""
+
+    # --- Any Greenhouse posting, keyed by its job id ------------------------
+    # Greenhouse job ids are global, so the id alone names the posting whatever page
+    # it was reached through: the hosted page (.../<slug>/jobs/<id>), the embed form
+    # (.../embed/job_app?for=<slug>&token=<id>) or a company careers page (?gh_jid=<id>).
+    # Before this, every embed URL dropped its query and collapsed to ONE key, so
+    # `applied.py check` said MATCH for any embed job at all, and the same posting under
+    # two URL shapes never matched — Abnormal's FedRAMP role went out 7 times and
+    # IXL's help desk role 6 times between 2026-09-02 and 09-23.
+    gh_id = _greenhouse_id(p)
+    if gh_id:
+        return f"https://boards.greenhouse.io/jobs/{gh_id}"
 
     # --- LinkedIn ----------------------------------------------------------
     if netloc.endswith("linkedin.com"):
