@@ -411,7 +411,7 @@ def sandbox(tmp_path, monkeypatch):
     pool.write_text("greenhouse:alpha\ngreenhouse:beta\nlever:gamma\n")
     monkeypatch.setattr(source, "POOL_PATH", pool)
     monkeypatch.setattr(source, "ROTATION_PATH", tmp_path / "board_rotation.csv")
-    for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH"):
+    for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH", "EVENTS_PATH"):
         monkeypatch.setattr(source, attr, tmp_path / f"{attr.lower()}.missing")
     monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "verify_cache.json")
     monkeypatch.setattr(source.time, "sleep", lambda *_: None)
@@ -654,15 +654,14 @@ def test_platform_of(url, platform):
 
 
 @pytest.mark.parametrize("platform", ["workable", "smartrecruiters", "workday",
-                                      "icims", "linkedin"])
+                                      "icims", "linkedin", "ashby"])
 def test_submit_blocked_platforms(platform):
     """0 of 147 Workable jobs and 0 of 7 SmartRecruiters ones ever became applications."""
     assert platform in source.SUBMIT_BLOCKED
 
 
-@pytest.mark.parametrize("platform", ["greenhouse", "lever", "breezy", "ashby"])
+@pytest.mark.parametrize("platform", ["greenhouse", "lever", "breezy"])
 def test_platforms_that_convert_are_still_served(platform):
-    """Ashby is weak (13 of 239) but not zero, so it sorts last rather than dropping."""
     assert platform not in source.SUBMIT_BLOCKED
 
 
@@ -872,3 +871,23 @@ def test_seeded_boards_outrank_never_mined_ones(sandbox):
     wins = sum(source.pick_boards(pool, state, 1)[0] == ("greenhouse", "alpha")
                for _ in range(400))
     assert wins > 280, wins   # x2.25 productivity over an unmined board
+
+
+def test_attempted_posting_is_never_served_again(sandbox, monkeypatch):
+    """A skip is marked seen, and the backlog IS seen.csv, so before attempted_urls() a
+    skipped posting came straight back: 148 of 209 attempts from 09-26 to 10-04 were
+    repeats. The careers-page twin of the same Greenhouse id must match too."""
+    events = sandbox / "apply_events.jsonl"
+    events.write_text(
+        '{"url": "https://job-boards.greenhouse.io/roblox/jobs/8211694", "outcome": "skipped"}\n'
+        'not json\n'
+        '{"url": "https://jobs.lever.co/acme/abc-123", "outcome": "blocked"}\n'
+        '{"url": "https://job-boards.greenhouse.io/coinbase/jobs/42", "outcome": "error"}\n')
+    monkeypatch.setattr(source, "EVENTS_PATH", events)
+    twin = source._norm("https://careers.roblox.com/jobs/8211694?gh_jid=8211694")
+    assert twin in source.attempted_urls()
+    assert twin in source.load_known_urls()
+    assert twin in source._dead_urls()
+    assert source._norm("https://jobs.lever.co/acme/abc-123/apply") in source._dead_urls()
+    assert source._norm("https://job-boards.greenhouse.io/roblox/jobs/1") not in source._dead_urls()
+    assert source._norm("https://job-boards.greenhouse.io/coinbase/jobs/42") not in source._dead_urls()

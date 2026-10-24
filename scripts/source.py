@@ -113,6 +113,7 @@ POOL_PATH = ROOT / "scripts" / "companies.txt"
 ROTATION_PATH = ROOT / "data" / "board_rotation.csv"
 APPLIED_PATH = ROOT / "data" / "applied.csv"
 SEEN_PATH = ROOT / "data" / "seen.csv"
+EVENTS_PATH = ROOT / "data" / "apply_events.jsonl"
 RETRY_PATH = ROOT / "data" / "retry.csv"  # already queued for another attempt — don't re-surface
 BLOCKLIST_PATH = ROOT / "data" / "blocklist.txt"  # "<ats_host>\t<company>\t<reason>"
 # Tier 1 per CLAUDE.md SITE ROUTING — the only platforms that actually convert. Ashby
@@ -705,8 +706,32 @@ def load_blocked_companies() -> set[str]:
     return blocked
 
 
+def attempted_urls() -> set[str]:
+    """Every posting a wave has already judged: applied, skipped or blocked.
+
+    The backlog is seen.csv, and a fit-skip is marked seen, so before this every skipped
+    posting came straight back next wave: from 2026-09-26 to 10-04, 148 of 209 logged
+    attempts were a posting already attempted ("VP Threat Research" skipped 7 times).
+    A blocked one returns only through retry.py, which reads retry.csv, not this. An
+    `error` is left servable: it is transient, and three of the 13 applications landed
+    since 09-26 were a second try after one.
+    """
+    out: set[str] = set()
+    if not EVENTS_PATH.exists():
+        return out
+    for line in EVENTS_PATH.read_text(errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+            u = _norm(e.get("url") or "")
+        except (ValueError, AttributeError):
+            continue
+        if u and e.get("outcome") != "error":
+            out.add(u)
+    return out
+
+
 def load_known_urls() -> set[str]:
-    known: set[str] = set()
+    known: set[str] = attempted_urls()
     for path in (APPLIED_PATH, SEEN_PATH, RETRY_PATH):
         if not path.exists():
             continue
@@ -724,7 +749,7 @@ def _dead_urls() -> set[str]:
     Deliberately does NOT include seen.csv -- in backlog mode seen.csv is the *source*,
     so the usual load_known_urls() dedup would filter out every candidate row.
     """
-    out: set[str] = set()
+    out: set[str] = attempted_urls()
     for name in ("applied.csv", "quarantine.csv", "retry_quarantine.csv", "retry.csv"):
         p = ROOT / "data" / name
         if not p.exists():
@@ -794,12 +819,15 @@ _HOST_PLATFORM = (
 # Workable's 0-for-147 is the one with a real sample behind it, and it agrees with what the
 # waves reported: hCaptcha/Turnstile blocks the submit regardless of source IP, so a
 # residential tunnel does not help. The others join it on the same evidence (Tier 3
-# HARD-AVOID in CLAUDE.md) with smaller samples. Ashby is deliberately NOT here -- 13 did
-# land, so it stays servable and simply sorts last via PLATFORM_CONVERSION.
+# HARD-AVOID in CLAUDE.md) with smaller samples. Ashby joined on 2026-10-24: its 13 landed
+# applications are all from July (last 07-09), and since then 0 of 326 logged attempts
+# landed (320 skipped, mostly by the brain's own HARD-AVOID rule, 6 blocked at submit).
+# Serving it only spent a page load per row for the brain to throw away.
 #
 # This is a serving filter, not a discovery one: the rows stay in seen.csv, so removing a
 # name here is all it takes to start offering them again if a wall ever comes down.
-SUBMIT_BLOCKED = frozenset({"workable", "smartrecruiters", "workday", "icims", "linkedin"})
+SUBMIT_BLOCKED = frozenset({"workable", "smartrecruiters", "workday", "icims", "linkedin",
+                            "ashby"})
 
 
 def platform_of(url: str) -> str:
