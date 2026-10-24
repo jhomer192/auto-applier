@@ -891,3 +891,13 @@ def test_attempted_posting_is_never_served_again(sandbox, monkeypatch):
     assert source._norm("https://jobs.lever.co/acme/abc-123/apply") in source._dead_urls()
     assert source._norm("https://job-boards.greenhouse.io/roblox/jobs/1") not in source._dead_urls()
     assert source._norm("https://job-boards.greenhouse.io/coinbase/jobs/42") not in source._dead_urls()
+
+
+@pytest.mark.parametrize("title", [
+    "Business Development Representative SaaS Cybersecurity",
+    "Junior AE Cybersecurity",
+    "SDR - Cyber Security",
+])
+def test_sales_titles_with_a_security_word_dropped(title):
+    """The sdr lane is deleted; a security keyword in a sales title must not revive it."""
+    assert classify(title, None) is None

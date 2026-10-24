@@ -296,6 +296,11 @@ EXCLUDE = (
     # work that has nothing to do with security compliance — the first live cyber wave
     # queued "Trade Compliance Analyst" at Magnet Forensics off that keyword.
     "trade compliance", "export compliance", "export control", "customs",
+    # Sales titles that carry a security word. The sdr lane was deleted on 2026-09-18,
+    # but "Business Development Representative SaaS Cybersecurity" (Zimperium) and
+    # "Junior AE Cybersecurity" (CredShields) still came back as lane=security,
+    # because "cybersecurity" is a security keyword.
+    "business development", "sales development", " sdr", " bdr", " ae ", "sales rep",
 )
 # Support/IT/SecOps titles that legitimately carry the word "engineer". These are
 # exempt from the engineer/developer family below — see the carve-out in classify().
