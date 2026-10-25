@@ -829,10 +829,14 @@ _HOST_PLATFORM = (
 # landed (320 skipped, mostly by the brain's own HARD-AVOID rule, 6 blocked at submit).
 # Serving it only spent a page load per row for the brain to throw away.
 #
+# Lever joins it on the same evidence (2026-10-24): 22 applications in August, then 0 of
+# 129 attempts since September — every submit now draws an hCaptcha fingerprint challenge,
+# residential tunnel or not.
+#
 # This is a serving filter, not a discovery one: the rows stay in seen.csv, so removing a
 # name here is all it takes to start offering them again if a wall ever comes down.
 SUBMIT_BLOCKED = frozenset({"workable", "smartrecruiters", "workday", "icims", "linkedin",
-                            "ashby"})
+                            "ashby", "lever"})
 
 
 def platform_of(url: str) -> str:

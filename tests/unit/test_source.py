@@ -654,13 +654,13 @@ def test_platform_of(url, platform):
 
 
 @pytest.mark.parametrize("platform", ["workable", "smartrecruiters", "workday",
-                                      "icims", "linkedin", "ashby"])
+                                      "icims", "linkedin", "ashby", "lever"])
 def test_submit_blocked_platforms(platform):
     """0 of 147 Workable jobs and 0 of 7 SmartRecruiters ones ever became applications."""
     assert platform in source.SUBMIT_BLOCKED
 
 
-@pytest.mark.parametrize("platform", ["greenhouse", "lever", "breezy"])
+@pytest.mark.parametrize("platform", ["greenhouse", "breezy"])
 def test_platforms_that_convert_are_still_served(platform):
     assert platform not in source.SUBMIT_BLOCKED
 
