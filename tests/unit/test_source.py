@@ -8,6 +8,7 @@ that let genuinely unreachable jobs through.
 """
 from __future__ import annotations
 
+import argparse
 import random
 import sys
 from pathlib import Path
@@ -891,6 +892,23 @@ def test_attempted_posting_is_never_served_again(sandbox, monkeypatch):
     assert source._norm("https://jobs.lever.co/acme/abc-123/apply") in source._dead_urls()
     assert source._norm("https://job-boards.greenhouse.io/roblox/jobs/1") not in source._dead_urls()
     assert source._norm("https://job-boards.greenhouse.io/coinbase/jobs/42") not in source._dead_urls()
+
+
+def test_careers_page_twin_of_a_judged_posting_not_served(sandbox, monkeypatch):
+    """seen.csv held ivo.ai/careers; the wave logged the Ashby URL it led to. Served 5x."""
+    events = sandbox / "apply_events.jsonl"
+    events.write_text(
+        '{"url": "https://jobs.ashbyhq.com/ivo-inc/1356", "outcome": "skipped", '
+        '"company": "Ivo", "title": "GRC Analyst"}\n')
+    seen = sandbox / "seen.csv"
+    seen.write_text("first_seen,url,company,title,location\n"
+                    "2026-09-19,https://ivo.ai/careers,Ivo,GRC Analyst ,San Francisco CA\n"
+                    "2026-09-19,https://ivo.ai/careers/2,Ivo,Security Analyst,San Francisco CA\n")
+    monkeypatch.setattr(source, "EVENTS_PATH", events)
+    monkeypatch.setattr(source, "SEEN_PATH", seen)
+    args = argparse.Namespace(lane=None, per_company=4, n=10, max_years=3, no_verify=True)
+    titles = [r["title"] for r in source.backlog_rows(args, set())]
+    assert titles == ["Security Analyst"]
 
 
 @pytest.mark.parametrize("title", [

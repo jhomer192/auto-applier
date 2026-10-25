@@ -735,6 +735,26 @@ def attempted_urls() -> set[str]:
     return out
 
 
+def attempted_titles() -> set[tuple[str, str]]:
+    """(company, title) of every judged posting, for rows whose URL can't be matched.
+
+    A seen.csv row can carry a company careers page ("https://ivo.ai/careers") while the
+    wave logged the ATS posting it led to (jobs.ashbyhq.com/ivo-inc/...). No URL rule joins
+    those two, so Ivo's GRC Analyst was served and skipped five times on 2026-10-24.
+    """
+    out: set[tuple[str, str]] = set()
+    if not EVENTS_PATH.exists():
+        return out
+    for line in EVENTS_PATH.read_text(errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("outcome") != "error" and e.get("company") and e.get("title"):
+            out.add((e["company"].strip().lower(), e["title"].strip().lower()))
+    return out
+
+
 def load_known_urls() -> set[str]:
     known: set[str] = attempted_urls()
     for path in (APPLIED_PATH, SEEN_PATH, RETRY_PATH):
@@ -1137,6 +1157,7 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
         print("[source] --backlog: no data/seen.csv", file=sys.stderr)
         return []
     dead = _dead_urls()
+    judged = attempted_titles()
     rows: list[dict] = []
     seen_urls: set[str] = set()
     total = 0
@@ -1158,6 +1179,8 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
                 n_walled += 1
                 continue
             title = row.get("title") or ""
+            if (company.strip().lower(), title.strip().lower()) in judged:
+                continue
             if DEAD_MARKER_RE.search(title) or REJECT_NOTE_RE.search(title):
                 n_marked += 1
                 continue
