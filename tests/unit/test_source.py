@@ -927,7 +927,6 @@ def test_sales_titles_with_a_security_word_dropped(title):
     ("Austin, TX", "IT Support Specialist", "austin"),
     ("Chicago, IL", "SOC Analyst", "chicago"),
     ("United States", "SOC Analyst - Austin TX", "austin"),
-    ("New York, NY; Washington, DC", "SOC Analyst", "nyc"),
 ])
 def test_added_metros_pass(location, title, metro):
     """NYC, Austin and Chicago were opened alongside the Bay (Jack, 2026-10-24)."""
@@ -943,6 +942,10 @@ def test_added_metros_pass(location, title, metro):
     ("Albany, New York", "IT Support"),
     ("Albany, New York, United States", "Expert IT Specialist"),
     ("Hudson, New York, United States", "Cybersecurity Faculty"),
+    ("McLean, Virginia, United States; New York, NY, United States", "Threat Analyst"),
+    ("New York, NY; Washington, DC", "SOC Analyst"),
+    ("Remote US", "ISSO - Reston VA"),
+    ("Chicago, IL | Bethesda, MD", "GRC Analyst"),
 ])
 def test_dc_and_nova_stay_closed(location, title):
     """Jack refused DC/NoVA twice. Opening other metros must not open these."""

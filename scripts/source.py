@@ -114,6 +114,16 @@ METRO_TERMS = {
     "chicago": ("chicago", "evanston, il"),
 }
 METRO_BARE = {"new york": "nyc", "austin": "austin", "chicago": "chicago"}
+# Vetoes a posting outright, even one that also lists an allowed office. Jack refused
+# DC/NoVA twice, and the brain's rule is "not as one office of several" either. All of
+# Virginia is listed (none of it is an allowed metro), plus DC and its Maryland ring.
+DC_NOVA = (
+    "washington, dc", "washington dc", "washington d.c", "district of columbia",
+    ", dc", "virginia", ", va", " va,", "mclean", "reston", "herndon", "chantilly",
+    "tysons", "fairfax", "dulles", "ashburn", "falls church", "leesburg", "manassas",
+    "bethesda", "rockville", "silver spring", "gaithersburg", "fort meade",
+    "annapolis junction", "columbia, md", "hanover, md", "laurel, md", "college park",
+)
 METRO_HEADER = {"sf": "San Francisco, CA", "nyc": "New York, NY",
                 "austin": "Austin, TX", "chicago": "Chicago, IL"}
 
@@ -701,6 +711,8 @@ def location_ok(location, title: str, url: str = "") -> bool:
     location = location or ""
     blob = f"{location} {title}".lower()
     if any(x in blob for x in NON_US):
+        return False
+    if any(x in f"{blob} " for x in DC_NOVA) or blob.rstrip().endswith((", va", " va")):
         return False
     if metro_of(location) not in (None, "sf"):
         return True
