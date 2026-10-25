@@ -17,3 +17,4 @@
 - A fit-skip is marked seen, and --backlog serves FROM seen.csv, so the backlog dedup must read apply_events.jsonl — without it 71% of attempts (09-26→10-04) were postings already judged. Leave `error` outcomes servable; a second try after an error is how 3 of 13 recent applies landed.
 - A URL-only dedup misses careers-page twins of ATS postings; also key on (company, title) from apply_events.
 - Greenhouse Country is its own required react-select, separate from the phone box; real keystrokes, not the JS setter.
+- DC/NoVA is permanently off for Zach's applier. Don't propose it as a throughput lever, even as an opt-in offer.
