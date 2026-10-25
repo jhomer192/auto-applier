@@ -86,12 +86,13 @@ QUERY_TITLES = (
 SEARCH_SITES = (
     "boards.greenhouse.io",
     "job-boards.greenhouse.io",
-    "jobs.lever.co",
     "breezy.hr",
 )
-# Bay + fully-remote-US, matching location_ok(). Nothing else — Jack's call 2026-09-18,
-# even though it holds most RMF/ISSO work (DC-metro onsite) out of reach.
-SEARCH_LOCATIONS = ("San Francisco Bay Area", "remote United States")
+# Matching location_ok(): Bay, NYC, Austin, Chicago (added 2026-10-24) and fully-remote-US.
+# DC/NoVA stay out — Jack's call 2026-09-18, re-confirmed 2026-10-24, even though they
+# hold most RMF/ISSO work.
+SEARCH_LOCATIONS = ("San Francisco Bay Area", "New York City", "Austin TX", "Chicago IL",
+                    "remote United States")
 
 
 # Employers who reliably post this kind of work — probed on every run, never sampled.

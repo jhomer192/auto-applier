@@ -101,6 +101,36 @@ def is_bay_area(*texts: str) -> bool:
     blob = " ".join(t for t in texts if t).lower()
     return bool(blob.strip()) and any(term in blob for term in BAY_TERMS)
 
+
+# Metros he will relocate to besides the Bay (Jack, 2026-10-24). DC and Northern Virginia
+# are deliberately absent and stay that way — Jack has refused them twice. Bare city
+# names that are also states or have namesakes are qualified ("New York, United States"
+# is also "Albany, New York, United States", so it is not a term); an exact "New York" /
+# "Austin" / "Chicago" location string is matched separately in metro_of().
+METRO_TERMS = {
+    "nyc": ("new york, ny", "new york, new york", "new york city", "nyc", "manhattan",
+            "brooklyn, ny"),
+    "austin": ("austin, tx", "austin, texas", "austin tx", "round rock, tx"),
+    "chicago": ("chicago", "evanston, il"),
+}
+METRO_BARE = {"new york": "nyc", "austin": "austin", "chicago": "chicago"}
+METRO_HEADER = {"sf": "San Francisco, CA", "nyc": "New York, NY",
+                "austin": "Austin, TX", "chicago": "Chicago, IL"}
+
+
+def metro_of(*texts: str) -> str | None:
+    """The allowed metro a location/title names: 'sf', 'nyc', 'austin', 'chicago', or None."""
+    if is_bay_area(*texts):
+        return "sf"
+    for t in texts:
+        if t and _squash(t) in METRO_BARE:
+            return METRO_BARE[_squash(t)]
+    blob = " ".join(t for t in texts if t).lower()
+    for metro, terms in METRO_TERMS.items():
+        if any(term in blob for term in terms):
+            return metro
+    return None
+
 # Every outbound request identifies as a normal desktop browser. The old "applier/1.0"
 # announced a bot to every WAF it touched, and Greenhouse blocked the whole domain from
 # this box for hours on 2026-08-08. These are public, unauthenticated board APIs — the
@@ -443,6 +473,8 @@ def _names_other_state(title: str) -> bool:
     """True if the title pins the role to a non-California state, e.g.
     "Outside Sales Representative - Portland, OR". Such postings are routinely filed
     under a country-wide location, so the location string alone won't catch them."""
+    if metro_of(title):
+        return False
     t = title.lower()
     if any(c in t for c in _CA_NON_BAY) and not is_bay_area(title):
         return True
@@ -660,7 +692,7 @@ def classify(title: str, lane_filter: str | None) -> str | None:
 
 
 def location_ok(location, title: str, url: str = "") -> bool:
-    """Bay Area, or a fully-remote-US role (Jack, 2026-07-19). Everything else drops."""
+    """Bay Area, NYC, Austin, Chicago, or a fully-remote-US role. Everything else drops."""
     # Some boards return a posting with no location at all (null, not ""). Coerce it to
     # the empty string, which the "remote" branch below already handles. Without this one
     # null-location posting raised AttributeError and killed the WHOLE run, losing every
@@ -670,6 +702,8 @@ def location_ok(location, title: str, url: str = "") -> bool:
     blob = f"{location} {title}".lower()
     if any(x in blob for x in NON_US):
         return False
+    if metro_of(location) not in (None, "sf"):
+        return True
     if _other_state_only(location):
         return False
     if any(c in blob for c in COAST_LOCKED):

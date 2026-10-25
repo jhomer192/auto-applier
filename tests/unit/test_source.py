@@ -182,10 +182,10 @@ def test_foreign_board_bare_remote_is_dropped():
 
 def test_foreign_board_gate_only_tightens():
     """The foreign-host check must ADD a requirement, never replace the ordinary one.
-    An early `return` on a US marker let a StubHub LA+NYC role through on the strength
+    An early `return` on a US marker let a StubHub LA+NYC role (NYC was out then) through on the strength
     of "United States" alone — a location the normal Bay/remote-US rule rejects."""
     assert not location_ok(
-        "Los Angeles, California, United States; New York, New York, United States",
+        "Los Angeles, California, United States; Seattle, Washington, United States",
         "People Operations Partner",
         "https://job-boards.eu.greenhouse.io/stubhubinc/jobs/4920545101",
     )
@@ -251,7 +251,7 @@ def test_support_tiers():
     ("United States", True), ("USA", True), ("U.S.", True), ("Nationwide", True),
     # A city is attached -> must satisfy the ordinary Bay-Area/remote-US rule.
     ("Los Angeles, California, United States", False),
-    ("New York, NY, United States", False),
+    ("Seattle, WA, United States", False),
     ("United States, San Mateo, CA", True),
 ])
 def test_bare_country_location(location, expected):
@@ -277,7 +277,7 @@ def test_state_named_in_title(title, expected):
     [
         ("Remote - USA", "Sales Development Representative", True),
         ("United States - Remote", "GRC Analyst", True),
-        ("New York, NY", "Sales Development Representative", False),
+        ("Denver, CO", "Sales Development Representative", False),
         ("London, UK", "Sales Development Representative", False),
         ("Remote - EMEA", "Sales Development Representative", False),
         ("", "Sales Development Representative", False),
@@ -692,7 +692,7 @@ def test_reject_note_leaves_real_titles_alone(title):
 
 @pytest.mark.parametrize("title,pinned", [
     ("BDR Texas Colorado", True),          # no comma, so the ", XX" rule never saw it
-    ("SDR - Austin, TX", True),
+    ("SDR - Dallas, TX", True),
     ("BDR - Pennsylvania only", True),
     ("Outside Sales Representative - Central Valley, CA", True),
     ("Sales Development Representative", False),
@@ -919,3 +919,31 @@ def test_careers_page_twin_of_a_judged_posting_not_served(sandbox, monkeypatch):
 def test_sales_titles_with_a_security_word_dropped(title):
     """The sdr lane is deleted; a security keyword in a sales title must not revive it."""
     assert classify(title, None) is None
+
+
+@pytest.mark.parametrize("location,title,metro", [
+    ("New York, NY", "Security Analyst", "nyc"),
+    ("New York", "GRC Analyst", "nyc"),
+    ("Austin, TX", "IT Support Specialist", "austin"),
+    ("Chicago, IL", "SOC Analyst", "chicago"),
+    ("United States", "SOC Analyst - Austin TX", "austin"),
+    ("New York, NY; Washington, DC", "SOC Analyst", "nyc"),
+])
+def test_added_metros_pass(location, title, metro):
+    """NYC, Austin and Chicago were opened alongside the Bay (Jack, 2026-10-24)."""
+    assert location_ok(location, title)
+    assert source.metro_of(location, title) == metro
+
+
+@pytest.mark.parametrize("location,title", [
+    ("Washington, DC", "SOC Analyst"),
+    ("Reston, VA", "ISSO"),
+    ("Arlington, Virginia", "GRC Analyst"),
+    ("United States", "Analyst - Herndon, VA"),
+    ("Albany, New York", "IT Support"),
+    ("Albany, New York, United States", "Expert IT Specialist"),
+    ("Hudson, New York, United States", "Cybersecurity Faculty"),
+])
+def test_dc_and_nova_stay_closed(location, title):
+    """Jack refused DC/NoVA twice. Opening other metros must not open these."""
+    assert not location_ok(location, title)
