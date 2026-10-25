@@ -42,6 +42,7 @@ import json
 import random
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -180,7 +181,7 @@ def slug_candidates(name: str) -> list[str]:
     return out[:4]
 
 
-def boards_for_names(names: list[str], platforms=("greenhouse", "lever", "breezy")
+def boards_for_names(names: list[str], platforms=("greenhouse", "breezy")
                      ) -> tuple[set[tuple[str, str]], int]:
     """Probe slug guesses for each company name; return the boards that answered."""
     from concurrent.futures import ThreadPoolExecutor
@@ -219,6 +220,77 @@ def add_to_pool(slugs: set[tuple[str, str]]) -> set[tuple[str, str]]:
             for platform, token in sorted(new):
                 f.write(f"{platform}:{token}\n")
     return new
+
+
+# --- LinkedIn guest search -----------------------------------------------------
+# Market-wide employer discovery. The pool only covers boards someone already found, and
+# a full sweep of all ~6,400 live boards on 2026-10-24 surfaced ~50 servable jobs — the
+# pool, not the market, was the ceiling. LinkedIn's logged-out job search covers nearly
+# every cyber posting in a metro, answers plain HTTP from the VPS (measured 2026-10-24),
+# and names the employer on every card. We never apply there (SUBMIT_BLOCKED); we take
+# the employer name and hand it to boards_for_names(), which finds its Greenhouse/Breezy
+# board, and probe_boards() then serves that board's own in-lane postings.
+LI_SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+# LinkedIn geo names, one per metro location_ok() accepts. f_WT=2 is LinkedIn's remote
+# filter, which is how "remote United States" is expressed.
+LI_LOCATIONS = (
+    ("San Francisco Bay Area", ""),
+    ("New York City Metropolitan Area", ""),
+    ("Austin, Texas Metropolitan Area", ""),
+    ("Greater Chicago Area", ""),
+    ("United States", "2"),
+)
+_LI_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+_LI_CARD = re.compile(
+    r'base-search-card__title">\s*([^<]+?)\s*<.*?'
+    r'base-search-card__subtitle">\s*(?:<a[^>]*>)?\s*([^<]+?)\s*<.*?'
+    r'job-search-card__location">\s*([^<]+?)\s*<', re.S)
+
+
+def linkedin_cards(title: str, geo: str, remote: str, pages: int) -> list[tuple[str, str, str]]:
+    """(title, company, location) cards for one search, newest month only."""
+    import html
+    import time
+    out: list[tuple[str, str, str]] = []
+    for page in range(pages):
+        q = {"keywords": title, "location": geo, "f_TPR": "r2592000", "start": page * 10}
+        if remote:
+            q["f_WT"] = remote
+        req = urllib.request.Request(f"{LI_SEARCH}?{urllib.parse.urlencode(q)}",
+                                     headers={"User-Agent": _LI_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # rate-limited: back off once, then give up on this search
+                time.sleep(20)
+                continue
+            break
+        except Exception:  # noqa: BLE001 — network blip ends this search, not the run
+            break
+        cards = [tuple(html.unescape(x) for x in m) for m in _LI_CARD.findall(body)]
+        out += cards
+        if len(cards) < 10:  # last page
+            break
+        time.sleep(1 + random.random())
+    return out
+
+
+def linkedin_names(pages: int = 10, titles=QUERY_TITLES) -> list[str]:
+    """Employers with an in-lane, in-metro posting on LinkedIn right now."""
+    names: dict[str, None] = {}
+    cards = 0
+    for title in titles:
+        for geo, remote in LI_LOCATIONS:
+            for t, company, loc in linkedin_cards(title, geo, remote, pages):
+                cards += 1
+                where = f"{loc} remote" if remote else loc
+                if S.classify(t, None) and S.location_ok(where, t):
+                    names.setdefault(company.strip(), None)
+    print(f"[search] linkedin: {cards} cards -> {len(names)} employers in lane and metro",
+          file=sys.stderr)
+    return list(names)
 
 
 # --- keyless APIs ------------------------------------------------------------
@@ -407,6 +479,9 @@ def main(argv: list[str]) -> int:
                          "line ('-' for stdin). Their ATS token is guessed and probed — "
                          "this is the cheap path when the results page shows the company "
                          "but hides the apply link (HiringCafe, LinkedIn)")
+    ap.add_argument("--linkedin", type=int, default=0, metavar="PAGES",
+                    help="discover employers from LinkedIn's public search, PAGES x10 "
+                         "cards per title x metro, and probe their boards")
     ap.add_argument("--apis", action="store_true",
                     help="run only the keyless remote-job APIs (no harvested URLs)")
     ap.add_argument("--no-apis", action="store_true", help="skip the keyless APIs")
@@ -436,6 +511,8 @@ def main(argv: list[str]) -> int:
 
     urls = _lines(args.ingest) if args.ingest else []
     names = _lines(args.names) if args.names else []
+    if args.linkedin:
+        names += linkedin_names(args.linkedin)
 
     rows = search_rows(urls, lane_filter=args.lane, use_apis=not args.no_apis,
                        probe=not args.no_probe, employers=not args.no_employers,
