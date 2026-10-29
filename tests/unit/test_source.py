@@ -8,6 +8,7 @@ that let genuinely unreachable jobs through.
 """
 from __future__ import annotations
 
+import argparse
 import random
 import sys
 from pathlib import Path
@@ -181,10 +182,10 @@ def test_foreign_board_bare_remote_is_dropped():
 
 def test_foreign_board_gate_only_tightens():
     """The foreign-host check must ADD a requirement, never replace the ordinary one.
-    An early `return` on a US marker let a StubHub LA+NYC role through on the strength
+    An early `return` on a US marker let a StubHub LA+NYC role (NYC was out then) through on the strength
     of "United States" alone — a location the normal Bay/remote-US rule rejects."""
     assert not location_ok(
-        "Los Angeles, California, United States; New York, New York, United States",
+        "Los Angeles, California, United States; Seattle, Washington, United States",
         "People Operations Partner",
         "https://job-boards.eu.greenhouse.io/stubhubinc/jobs/4920545101",
     )
@@ -250,7 +251,7 @@ def test_support_tiers():
     ("United States", True), ("USA", True), ("U.S.", True), ("Nationwide", True),
     # A city is attached -> must satisfy the ordinary Bay-Area/remote-US rule.
     ("Los Angeles, California, United States", False),
-    ("New York, NY, United States", False),
+    ("Seattle, WA, United States", False),
     ("United States, San Mateo, CA", True),
 ])
 def test_bare_country_location(location, expected):
@@ -276,7 +277,7 @@ def test_state_named_in_title(title, expected):
     [
         ("Remote - USA", "Sales Development Representative", True),
         ("United States - Remote", "GRC Analyst", True),
-        ("New York, NY", "Sales Development Representative", False),
+        ("Denver, CO", "Sales Development Representative", False),
         ("London, UK", "Sales Development Representative", False),
         ("Remote - EMEA", "Sales Development Representative", False),
         ("", "Sales Development Representative", False),
@@ -411,7 +412,7 @@ def sandbox(tmp_path, monkeypatch):
     pool.write_text("greenhouse:alpha\ngreenhouse:beta\nlever:gamma\n")
     monkeypatch.setattr(source, "POOL_PATH", pool)
     monkeypatch.setattr(source, "ROTATION_PATH", tmp_path / "board_rotation.csv")
-    for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH"):
+    for attr in ("APPLIED_PATH", "SEEN_PATH", "RETRY_PATH", "BLOCKLIST_PATH", "EVENTS_PATH"):
         monkeypatch.setattr(source, attr, tmp_path / f"{attr.lower()}.missing")
     monkeypatch.setattr(source, "VERIFY_CACHE_PATH", tmp_path / "verify_cache.json")
     monkeypatch.setattr(source.time, "sleep", lambda *_: None)
@@ -654,15 +655,14 @@ def test_platform_of(url, platform):
 
 
 @pytest.mark.parametrize("platform", ["workable", "smartrecruiters", "workday",
-                                      "icims", "linkedin"])
+                                      "icims", "linkedin", "ashby", "lever"])
 def test_submit_blocked_platforms(platform):
     """0 of 147 Workable jobs and 0 of 7 SmartRecruiters ones ever became applications."""
     assert platform in source.SUBMIT_BLOCKED
 
 
-@pytest.mark.parametrize("platform", ["greenhouse", "lever", "breezy", "ashby"])
+@pytest.mark.parametrize("platform", ["greenhouse", "breezy"])
 def test_platforms_that_convert_are_still_served(platform):
-    """Ashby is weak (13 of 239) but not zero, so it sorts last rather than dropping."""
     assert platform not in source.SUBMIT_BLOCKED
 
 
@@ -692,7 +692,7 @@ def test_reject_note_leaves_real_titles_alone(title):
 
 @pytest.mark.parametrize("title,pinned", [
     ("BDR Texas Colorado", True),          # no comma, so the ", XX" rule never saw it
-    ("SDR - Austin, TX", True),
+    ("SDR - Dallas, TX", True),
     ("BDR - Pennsylvania only", True),
     ("Outside Sales Representative - Central Valley, CA", True),
     ("Sales Development Representative", False),
@@ -872,3 +872,81 @@ def test_seeded_boards_outrank_never_mined_ones(sandbox):
     wins = sum(source.pick_boards(pool, state, 1)[0] == ("greenhouse", "alpha")
                for _ in range(400))
     assert wins > 280, wins   # x2.25 productivity over an unmined board
+
+
+def test_attempted_posting_is_never_served_again(sandbox, monkeypatch):
+    """A skip is marked seen, and the backlog IS seen.csv, so before attempted_urls() a
+    skipped posting came straight back: 148 of 209 attempts from 09-26 to 10-04 were
+    repeats. The careers-page twin of the same Greenhouse id must match too."""
+    events = sandbox / "apply_events.jsonl"
+    events.write_text(
+        '{"url": "https://job-boards.greenhouse.io/roblox/jobs/8211694", "outcome": "skipped"}\n'
+        'not json\n'
+        '{"url": "https://jobs.lever.co/acme/abc-123", "outcome": "blocked"}\n'
+        '{"url": "https://job-boards.greenhouse.io/coinbase/jobs/42", "outcome": "error"}\n')
+    monkeypatch.setattr(source, "EVENTS_PATH", events)
+    twin = source._norm("https://careers.roblox.com/jobs/8211694?gh_jid=8211694")
+    assert twin in source.attempted_urls()
+    assert twin in source.load_known_urls()
+    assert twin in source._dead_urls()
+    assert source._norm("https://jobs.lever.co/acme/abc-123/apply") in source._dead_urls()
+    assert source._norm("https://job-boards.greenhouse.io/roblox/jobs/1") not in source._dead_urls()
+    assert source._norm("https://job-boards.greenhouse.io/coinbase/jobs/42") not in source._dead_urls()
+
+
+def test_careers_page_twin_of_a_judged_posting_not_served(sandbox, monkeypatch):
+    """seen.csv held ivo.ai/careers; the wave logged the Ashby URL it led to. Served 5x."""
+    events = sandbox / "apply_events.jsonl"
+    events.write_text(
+        '{"url": "https://jobs.ashbyhq.com/ivo-inc/1356", "outcome": "skipped", '
+        '"company": "Ivo", "title": "GRC Analyst"}\n')
+    seen = sandbox / "seen.csv"
+    seen.write_text("first_seen,url,company,title,location\n"
+                    "2026-09-19,https://ivo.ai/careers,Ivo,GRC Analyst ,San Francisco CA\n"
+                    "2026-09-19,https://ivo.ai/careers/2,Ivo,Security Analyst,San Francisco CA\n")
+    monkeypatch.setattr(source, "EVENTS_PATH", events)
+    monkeypatch.setattr(source, "SEEN_PATH", seen)
+    args = argparse.Namespace(lane=None, per_company=4, n=10, max_years=3, no_verify=True)
+    titles = [r["title"] for r in source.backlog_rows(args, set())]
+    assert titles == ["Security Analyst"]
+
+
+@pytest.mark.parametrize("title", [
+    "Business Development Representative SaaS Cybersecurity",
+    "Junior AE Cybersecurity",
+    "SDR - Cyber Security",
+])
+def test_sales_titles_with_a_security_word_dropped(title):
+    """The sdr lane is deleted; a security keyword in a sales title must not revive it."""
+    assert classify(title, None) is None
+
+
+@pytest.mark.parametrize("location,title,metro", [
+    ("New York, NY", "Security Analyst", "nyc"),
+    ("New York", "GRC Analyst", "nyc"),
+    ("Austin, TX", "IT Support Specialist", "austin"),
+    ("Chicago, IL", "SOC Analyst", "chicago"),
+    ("United States", "SOC Analyst - Austin TX", "austin"),
+])
+def test_added_metros_pass(location, title, metro):
+    """NYC, Austin and Chicago were opened alongside the Bay (Jack, 2026-10-24)."""
+    assert location_ok(location, title)
+    assert source.metro_of(location, title) == metro
+
+
+@pytest.mark.parametrize("location,title", [
+    ("Washington, DC", "SOC Analyst"),
+    ("Reston, VA", "ISSO"),
+    ("Arlington, Virginia", "GRC Analyst"),
+    ("United States", "Analyst - Herndon, VA"),
+    ("Albany, New York", "IT Support"),
+    ("Albany, New York, United States", "Expert IT Specialist"),
+    ("Hudson, New York, United States", "Cybersecurity Faculty"),
+    ("McLean, Virginia, United States; New York, NY, United States", "Threat Analyst"),
+    ("New York, NY; Washington, DC", "SOC Analyst"),
+    ("Remote US", "ISSO - Reston VA"),
+    ("Chicago, IL | Bethesda, MD", "GRC Analyst"),
+])
+def test_dc_and_nova_stay_closed(location, title):
+    """Jack refused DC/NoVA twice. Opening other metros must not open these."""
+    assert not location_ok(location, title)

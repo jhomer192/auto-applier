@@ -14,3 +14,7 @@
 - applied.py check only reads applied.csv (wins), so a posting skipped for fit can be re-queued and judged the other way hours later. check now also reports a prior skipped/blocked outcome from apply_events.jsonl.
 - Greenhouse serves job `content` HTML-ESCAPED, so stripping tags before html.unescape leaves the markup as literal text and defeats any regex needing two words near each other — the years gate was silently dead on greenhouse. Unescape first, strip second.
 - Keep verify's --max-years at the same bar the brain judges by. Verify at 4 while the brain calls 3+ too senior means every 3-year posting is printed, opened in a browser and thrown away at 5-10 minutes each.
+- A fit-skip is marked seen, and --backlog serves FROM seen.csv, so the backlog dedup must read apply_events.jsonl — without it 71% of attempts (09-26→10-04) were postings already judged. Leave `error` outcomes servable; a second try after an error is how 3 of 13 recent applies landed.
+- A URL-only dedup misses careers-page twins of ATS postings; also key on (company, title) from apply_events.
+- Greenhouse Country is its own required react-select, separate from the phone box; real keystrokes, not the JS setter.
+- DC/NoVA is permanently off for Zach's applier. Don't propose it as a throughput lever, even as an opt-in offer.
