@@ -51,3 +51,30 @@ def test_mark_seen_appends_only_new_urls(tmp_path, monkeypatch):
     J.mark_seen(rows)
     lines = seen.read_text().splitlines()
     assert len(lines) == 3 and lines[-1].endswith("acme/jobs/2,Acme,SOC,\"New York, NY\"")
+
+
+import find_jobs as F  # noqa: E402
+
+
+def test_active_clearance_drops_only_present_tense_requirements():
+    assert F.needs_active_clearance("Must hold an active TS/SCI clearance")
+    assert F.needs_active_clearance("Current Top Secret clearance required")
+    assert F.needs_active_clearance("TS/SCI with full scope polygraph")
+    assert not F.needs_active_clearance("Must be able to obtain a TS/SCI clearance")
+    assert not F.needs_active_clearance("Eligible to obtain a Secret clearance")
+
+
+def test_senior_titles_dropped():
+    for t in ("Senior SOC Analyst", "Sr. Security Analyst", "IT Support Lead",
+              "Security Manager", "Threat Detection Analyst III"):
+        assert F.SENIOR.search(t), t
+    for t in ("SOC Analyst", "IT Support Specialist II", "Help Desk Technician"):
+        assert not F.SENIOR.search(t), t
+
+
+def test_careers_page_board_links():
+    html = ('<script src="https://boards.greenhouse.io/embed/job_board/js?for=acmeco"></script>'
+            '<a href="https://acme.breezy.hr/p/1">x</a>'
+            '<a href="https://jobs.lever.co/leverco">y</a>')
+    got = {(p, t) for p, pat in F._BOARD_RE for t in pat.findall(html)}
+    assert {("greenhouse", "acmeco"), ("breezy", "acme"), ("lever", "leverco")} <= got

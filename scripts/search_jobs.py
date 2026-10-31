@@ -248,32 +248,45 @@ _LI_CARD = re.compile(
     r'job-search-card__location">\s*([^<]+?)\s*<', re.S)
 
 
-def linkedin_cards(title: str, geo: str, remote: str, pages: int) -> list[tuple[str, str, str]]:
-    """(title, company, location) cards for one search, newest month only."""
+def linkedin_cards(title: str, geo: str, remote: str, pages: int,
+                   level: str = "") -> list[tuple[str, str, str]]:
+    """(title, company, location) cards for one search, newest month only.
+
+    `level` is LinkedIn's f_E experience filter ("2,3" = entry + associate).
+    """
     import html
     import time
     out: list[tuple[str, str, str]] = []
-    for page in range(pages):
+    page, backoff = 0, 30
+    while page < pages:
         q = {"keywords": title, "location": geo, "f_TPR": "r2592000", "start": page * 10}
         if remote:
             q["f_WT"] = remote
+        if level:
+            q["f_E"] = level
         req = urllib.request.Request(f"{LI_SEARCH}?{urllib.parse.urlencode(q)}",
                                      headers={"User-Agent": _LI_UA})
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 body = r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
-            if e.code == 429:  # rate-limited: back off once, then give up on this search
-                time.sleep(20)
+            # 429 means "slow down", not "no more results": retry the SAME page after a
+            # growing pause. Skipping it (the first version) silently dropped most pages
+            # once LinkedIn started throttling, measured 2026-11-01.
+            if e.code == 429 and backoff <= 480:
+                time.sleep(backoff + random.random() * 5)
+                backoff *= 2
                 continue
             break
         except Exception:  # noqa: BLE001 — network blip ends this search, not the run
             break
+        backoff = 30
         cards = [tuple(html.unescape(x) for x in m) for m in _LI_CARD.findall(body)]
         out += cards
         if len(cards) < 10:  # last page
             break
-        time.sleep(1 + random.random())
+        page += 1
+        time.sleep(2 + 2 * random.random())
     return out
 
 
