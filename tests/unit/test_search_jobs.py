@@ -38,3 +38,16 @@ def test_names_keep_only_in_lane_in_metro(monkeypatch):
     monkeypatch.setattr(J, "linkedin_cards", lambda *a: cards)
     monkeypatch.setattr(J, "LI_LOCATIONS", (("x", ""),))
     assert J.linkedin_names(1, titles=("SOC Analyst",)) == ["Acme"]
+
+
+def test_mark_seen_appends_only_new_urls(tmp_path, monkeypatch):
+    seen = tmp_path / "seen.csv"
+    seen.write_text("first_seen,url,company,title,location\n"
+                    "t,https://job-boards.greenhouse.io/acme/jobs/1,Acme,SOC,NYC\n")
+    monkeypatch.setattr(J.S, "SEEN_PATH", seen)
+    rows = [{"url": u, "company": "Acme", "title": "SOC", "location": "New York, NY"}
+            for u in ("https://job-boards.greenhouse.io/acme/jobs/1",
+                      "https://job-boards.greenhouse.io/acme/jobs/2")]
+    J.mark_seen(rows)
+    lines = seen.read_text().splitlines()
+    assert len(lines) == 3 and lines[-1].endswith("acme/jobs/2,Acme,SOC,\"New York, NY\"")

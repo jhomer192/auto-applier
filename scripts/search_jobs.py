@@ -288,6 +288,8 @@ def linkedin_names(pages: int = 10, titles=QUERY_TITLES) -> list[str]:
                 where = f"{loc} remote" if remote else loc
                 if S.classify(t, None) and S.location_ok(where, t):
                     names.setdefault(company.strip(), None)
+        print(f"[search] linkedin {title!r}: {cards} cards, {len(names)} employers so far",
+              file=sys.stderr)
     print(f"[search] linkedin: {cards} cards -> {len(names)} employers in lane and metro",
           file=sys.stderr)
     return list(names)
@@ -464,6 +466,24 @@ def search_rows(urls: list[str] | None = None, lane_filter: str | None = None,
     return rows
 
 
+def mark_seen(rows: list[dict]) -> None:
+    """Append rows to seen.csv in seen.py's column order; the backlog serves from there."""
+    import csv
+    from datetime import datetime, timezone
+    path = S.SEEN_PATH
+    have = set()
+    if path.exists():
+        with path.open(newline="") as f:
+            have = {_norm(r.get("url", "")) for r in csv.DictReader(f)}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    new = [r for r in rows if _norm(r["url"]) not in have]
+    with path.open("a", newline="") as f:
+        w = csv.writer(f)
+        for r in new:
+            w.writerow([now, r["url"], r["company"], r["title"], r["location"]])
+    print(f"[search] marked {len(new)} new rows in seen.csv", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Title-first job search (see module docstring).")
     ap.add_argument("--queries", action="store_true",
@@ -482,6 +502,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--linkedin", type=int, default=0, metavar="PAGES",
                     help="discover employers from LinkedIn's public search, PAGES x10 "
                          "cards per title x metro, and probe their boards")
+    ap.add_argument("--mark", action="store_true",
+                    help="also append every served row to seen.csv, so the next wave's "
+                         "--backlog serves it (this is what the crawl timer runs)")
     ap.add_argument("--apis", action="store_true",
                     help="run only the keyless remote-job APIs (no harvested URLs)")
     ap.add_argument("--no-apis", action="store_true", help="skip the keyless APIs")
@@ -531,6 +554,8 @@ def main(argv: list[str]) -> int:
                            enabled=not args.no_verify, label=" (search)")
     for r in served:
         print("\t".join([r["url"], r["company"], r["title"], r["location"], r["lane"]]))
+    if args.mark and served:
+        mark_seen(served)
     lanes: dict[str, int] = {}
     for r in served:
         lanes[r["lane"]] = lanes.get(r["lane"], 0) + 1
