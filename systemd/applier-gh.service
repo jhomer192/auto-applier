@@ -1,0 +1,15 @@
+[Unit]
+Description=auto-applier: deterministic Greenhouse runner (no model calls)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/auto-applier
+ExecStart=/usr/bin/xvfb-run -a --server-args="-screen 0 1366x768x24" /usr/bin/python3 -u scripts/gh_runner.py
+Restart=always
+RestartSec=60
+Nice=10
+StandardOutput=append:/opt/auto-applier/data/gh_runner.log
+StandardError=append:/opt/auto-applier/data/gh_runner.log
+
+[Install]
+WantedBy=multi-user.target
