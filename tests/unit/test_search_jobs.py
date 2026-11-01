@@ -64,11 +64,11 @@ def test_active_clearance_drops_only_present_tense_requirements():
     assert not F.needs_active_clearance("Eligible to obtain a Secret clearance")
 
 
-def test_senior_titles_dropped():
-    for t in ("Senior SOC Analyst", "Sr. Security Analyst", "IT Support Lead",
-              "Security Manager", "Threat Detection Analyst III"):
+def test_only_executive_titles_dropped():
+    for t in ("Director of Security", "Head of IT", "VP, Information Security"):
         assert F.SENIOR.search(t), t
-    for t in ("SOC Analyst", "IT Support Specialist II", "Help Desk Technician"):
+    for t in ("Senior SOC Analyst", "Sr. Security Analyst", "IT Support Lead",
+              "Security Manager", "Threat Detection Analyst III", "SOC Analyst"):
         assert not F.SENIOR.search(t), t
 
 

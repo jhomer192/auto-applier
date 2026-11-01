@@ -106,7 +106,6 @@ CYBER_NON_TARGETS = [
     "Solutions Engineer",
     "Sales Engineer",
     "TS/SCI Poly Cyber Analyst",
-    "Senior GRC Manager",
     "Tax Accountant",
     "Financial Statement Audit Associate",
 ]
@@ -241,8 +240,10 @@ def test_clearance_gated_roles_dropped(title):
     assert classify(title, None) is None
 
 
-def test_support_tiers():
-    assert classify("Tier 3 Technical Support Agent", None) is None
+def test_senior_roles_stay_in_lane():
+    # Jack, 2026-11-01: "submit for senior jobs".
+    assert classify("Senior GRC Manager", None) is not None
+    assert classify("Tier 3 Technical Support Agent", None) == "it"
     assert classify("Tier 1 Technical Support Specialist", None) == "it"
 
 
