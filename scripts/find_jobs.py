@@ -64,6 +64,15 @@ _NOT_SLUG = {"www", "jobs", "app", "api", "embed", "v1", "js", "boards", "job_bo
 CAREER_PATHS = ("", "/careers", "/jobs", "/careers/", "/company/careers", "/about/careers",
                 "/join-us", "/about-us/careers")
 _UA = J._LI_UA
+# Titles searched only for this harvest, on top of the crawl's QUERY_TITLES. Each one
+# passes S.classify, so its cards survive the lane gate below.
+EXTRA_TITLES = (
+    "Cybersecurity Analyst", "Junior Security Analyst", "Cybersecurity Specialist",
+    "Information Security Specialist", "Incident Response Analyst",
+    "Threat Intelligence Analyst", "Privacy Analyst", "Cyber Security Engineer I",
+    "IT Specialist", "Desktop Support Technician", "Service Desk Analyst",
+    "Technical Support Specialist", "IT Support Engineer", "Internal Audit Associate",
+)
 
 
 def _get_text(url: str, timeout: int = 12) -> str:
@@ -108,7 +117,7 @@ def harvest_employers(pages: int, cache: dict) -> dict[str, list[str]]:
     """LinkedIn employers with an in-lane, in-metro card -> the card titles seen."""
     emp: dict[str, list[str]] = cache.setdefault("employers", {})
     done: list[str] = cache.setdefault("searched", [])
-    for title in J.QUERY_TITLES:
+    for title in J.QUERY_TITLES + EXTRA_TITLES:
         for geo, remote in J.LI_LOCATIONS:
             for level in ("", "2,3"):           # all levels, then entry+associate only
                 key = f"{title}|{geo}|{level}"
