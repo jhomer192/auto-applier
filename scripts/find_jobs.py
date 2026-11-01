@@ -37,8 +37,8 @@ from url_norm import normalize as _norm  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "data" / "find_jobs_cache.json"   # cards + resolved boards, so reruns are cheap
 
-SENIOR = re.compile(r"\b(senior|sr\.?|lead|principal|staff|manager|director|head|vp|"
-                    r"chief|architect|iii|iv)\b", re.I)
+# Executive titles only; senior ICs and managers are in (Jack, 2026-11-01).
+SENIOR = re.compile(r"\b(director|head|vp|chief|architect)\b", re.I)
 # Needs a clearance he does not hold yet. His TS is in progress, so "ability to obtain"
 # and "eligible for" stay in; only a present-tense requirement drops.
 _ACTIVE = re.compile(r"\b(active|current)\s+(ts|top secret|ts/sci|secret)\b", re.I)
@@ -175,7 +175,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", help="write candidate JSON here")
     ap.add_argument("--pages", type=int, default=10)
-    ap.add_argument("--max-years", type=int, default=2)
+    ap.add_argument("--max-years", type=int, default=0)
     ap.add_argument("--mark", metavar="TSV", help="append url,company,title,location rows to seen.csv")
     args = ap.parse_args(argv[1:])
 

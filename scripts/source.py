@@ -294,9 +294,11 @@ def _tier(lane: str) -> int:
 #     which are among the highest-conversion openings a zero-experience candidate gets.
 #   - " ii" killed "Associate Operations Support Specialist II" and "IT Support
 #     Specialist II". Level II is 1-2 years, not out of reach. III/IV stay.
+# Seniority (Jack, 2026-11-01: "submit for senior jobs"): senior/sr/staff/principal/
+# lead/manager and levels II-IV are no longer killed. Only executive titles still drop.
 EXCLUDE = (
-    "senior", "sr.", "sr ", "(sr", "sr)", "staff", "principal", "director", "vp ",
-    "vice president", "head of", "manager", "lead ", " lead", "architect", "chief",
+    "director", "vp ",
+    "vice president", "head of", "architect", "chief",
     "account executive", "executive director", "executive assistant", "sales executive",
     "client executive", "business partner", "commander", "sourcer",
     "part time", "part-time", "seasonal", "driver", "success executive",
@@ -306,10 +308,7 @@ EXCLUDE = (
     # ALLOWED on purpose -- see the Vercel/Mainspring and Info-Security-Analyst-Temp
     # notes in this module's docstring history; duration is not the objection.
     "on call", "on-call", "mailroom", "mail room",
-    " iii", " iv", "level 3",
-    # " ii" joins them: every "Engineer II"/"Analyst II" this pipeline has opened stated
-    # 4-5 years. "Tier 1/2 analyst" is a different thing and stays in-lane.
-    " ii ", " ii)", "(ii)", "level 2 engineer",
+    "level 2 engineer",
     "software engineer", "software developer", "developer", "engineer", "engineering",
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
@@ -318,7 +317,7 @@ EXCLUDE = (
     # Bare "audit" used to live on the line above and was killing the whole SOX/ITGC/
     # IT-audit family, which is squarely in-lane for a GRC candidate (Jack, 2026-09-18).
     # Narrowed to the accounting-side titles; "cpa"/"tax "/"accountant" still stand.
-    "financial statement audit", "external audit", "audit senior",
+    "financial statement audit", "external audit",
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
     "work at home", "work from home", "data entry",
     "expression of interest", "talent pool", "talent community", "general application",
@@ -331,7 +330,6 @@ EXCLUDE = (
     # SECRET, so cleared/clearance postings are back in — they are a large share of the
     # cyber market. What a Secret does NOT reach still stands:
     "ts/sci", "polygraph", "full scope", "ci poly", "top secret",
-    "tier 3",  # escalation tier — senior by definition; tier 1/2 analyst stays in-lane
     # "compliance analyst" is in-lane vocabulary, but it also matches customs/export
     # work that has nothing to do with security compliance — the first live cyber wave
     # queued "Trade Compliance Analyst" at Magnet Forensics off that keyword.
@@ -969,7 +967,8 @@ VERIFY_TTL_H = 24
 # year looser than the brain, so each of those rows was printed, opened in the browser
 # and thrown away at 5-10 minutes apiece. The min-years rule still protects the
 # "2+ required, 5+ preferred" posting: only the smallest number on the page counts.
-DEFAULT_MAX_YEARS = 3
+# 0 = off (Jack, 2026-11-01: senior jobs are in, so a years bar no longer drops rows).
+DEFAULT_MAX_YEARS = 0
 _YEARS_RE = re.compile(
     r"(\d{1,2})\s*(?:\+|plus|or more)?\s*(?:-|–|to)?\s*(?:\d{1,2})?\s*\+?\s*years?"
     # "2+ years required" and "3 years minimum" name a bar as plainly as "years of
