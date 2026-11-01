@@ -101,6 +101,46 @@ def is_bay_area(*texts: str) -> bool:
     blob = " ".join(t for t in texts if t).lower()
     return bool(blob.strip()) and any(term in blob for term in BAY_TERMS)
 
+
+# Metros he will relocate to besides the Bay (Jack, 2026-10-24). DC and Northern Virginia
+# are deliberately absent and stay that way — Jack has refused them twice. Bare city
+# names that are also states or have namesakes are qualified ("New York, United States"
+# is also "Albany, New York, United States", so it is not a term); an exact "New York" /
+# "Austin" / "Chicago" location string is matched separately in metro_of().
+METRO_TERMS = {
+    "nyc": ("new york, ny", "new york, new york", "new york city", "nyc", "manhattan",
+            "brooklyn, ny"),
+    "austin": ("austin, tx", "austin, texas", "austin tx", "round rock, tx"),
+    "chicago": ("chicago", "evanston, il"),
+}
+METRO_BARE = {"new york": "nyc", "austin": "austin", "chicago": "chicago"}
+# Vetoes a posting outright, even one that also lists an allowed office. Jack refused
+# DC/NoVA twice, and the brain's rule is "not as one office of several" either. All of
+# Virginia is listed (none of it is an allowed metro), plus DC and its Maryland ring.
+DC_NOVA = (
+    "washington, dc", "washington dc", "washington d.c", "district of columbia",
+    ", dc", "virginia", ", va", " va,", "mclean", "reston", "herndon", "chantilly",
+    "tysons", "fairfax", "dulles", "ashburn", "falls church", "leesburg", "manassas",
+    "bethesda", "rockville", "silver spring", "gaithersburg", "fort meade",
+    "annapolis junction", "columbia, md", "hanover, md", "laurel, md", "college park",
+)
+METRO_HEADER = {"sf": "San Francisco, CA", "nyc": "New York, NY",
+                "austin": "Austin, TX", "chicago": "Chicago, IL"}
+
+
+def metro_of(*texts: str) -> str | None:
+    """The allowed metro a location/title names: 'sf', 'nyc', 'austin', 'chicago', or None."""
+    if is_bay_area(*texts):
+        return "sf"
+    for t in texts:
+        if t and _squash(t) in METRO_BARE:
+            return METRO_BARE[_squash(t)]
+    blob = " ".join(t for t in texts if t).lower()
+    for metro, terms in METRO_TERMS.items():
+        if any(term in blob for term in terms):
+            return metro
+    return None
+
 # Every outbound request identifies as a normal desktop browser. The old "applier/1.0"
 # announced a bot to every WAF it touched, and Greenhouse blocked the whole domain from
 # this box for hours on 2026-08-08. These are public, unauthenticated board APIs — the
@@ -113,6 +153,7 @@ POOL_PATH = ROOT / "scripts" / "companies.txt"
 ROTATION_PATH = ROOT / "data" / "board_rotation.csv"
 APPLIED_PATH = ROOT / "data" / "applied.csv"
 SEEN_PATH = ROOT / "data" / "seen.csv"
+EVENTS_PATH = ROOT / "data" / "apply_events.jsonl"
 RETRY_PATH = ROOT / "data" / "retry.csv"  # already queued for another attempt — don't re-surface
 BLOCKLIST_PATH = ROOT / "data" / "blocklist.txt"  # "<ats_host>\t<company>\t<reason>"
 # Tier 1 per CLAUDE.md SITE ROUTING — the only platforms that actually convert. Ashby
@@ -253,9 +294,11 @@ def _tier(lane: str) -> int:
 #     which are among the highest-conversion openings a zero-experience candidate gets.
 #   - " ii" killed "Associate Operations Support Specialist II" and "IT Support
 #     Specialist II". Level II is 1-2 years, not out of reach. III/IV stay.
+# Seniority (Jack, 2026-11-01: "submit for senior jobs"): senior/sr/staff/principal/
+# lead/manager and levels II-IV are no longer killed. Only executive titles still drop.
 EXCLUDE = (
-    "senior", "sr.", "sr ", "(sr", "sr)", "staff", "principal", "director", "vp ",
-    "vice president", "head of", "manager", "lead ", " lead", "architect", "chief",
+    "director", "vp ",
+    "vice president", "head of", "architect", "chief",
     "account executive", "executive director", "executive assistant", "sales executive",
     "client executive", "business partner", "commander", "sourcer",
     "part time", "part-time", "seasonal", "driver", "success executive",
@@ -265,10 +308,7 @@ EXCLUDE = (
     # ALLOWED on purpose -- see the Vercel/Mainspring and Info-Security-Analyst-Temp
     # notes in this module's docstring history; duration is not the objection.
     "on call", "on-call", "mailroom", "mail room",
-    " iii", " iv", "level 3",
-    # " ii" joins them: every "Engineer II"/"Analyst II" this pipeline has opened stated
-    # 4-5 years. "Tier 1/2 analyst" is a different thing and stays in-lane.
-    " ii ", " ii)", "(ii)", "level 2 engineer",
+    "level 2 engineer",
     "software engineer", "software developer", "developer", "engineer", "engineering",
     "data scientist", "machine learning", "devops", "backend", "back end", "frontend",
     "front end", "full stack", "full-stack", "firmware", "scientist", "researcher",
@@ -277,7 +317,7 @@ EXCLUDE = (
     # Bare "audit" used to live on the line above and was killing the whole SOX/ITGC/
     # IT-audit family, which is squarely in-lane for a GRC candidate (Jack, 2026-09-18).
     # Narrowed to the accounting-side titles; "cpa"/"tax "/"accountant" still stand.
-    "financial statement audit", "external audit", "audit senior",
+    "financial statement audit", "external audit",
     # Pipelines and evergreen reqs, not open roles — applying to these goes nowhere.
     "work at home", "work from home", "data entry",
     "expression of interest", "talent pool", "talent community", "general application",
@@ -290,11 +330,15 @@ EXCLUDE = (
     # SECRET, so cleared/clearance postings are back in — they are a large share of the
     # cyber market. What a Secret does NOT reach still stands:
     "ts/sci", "polygraph", "full scope", "ci poly", "top secret",
-    "tier 3",  # escalation tier — senior by definition; tier 1/2 analyst stays in-lane
     # "compliance analyst" is in-lane vocabulary, but it also matches customs/export
     # work that has nothing to do with security compliance — the first live cyber wave
     # queued "Trade Compliance Analyst" at Magnet Forensics off that keyword.
     "trade compliance", "export compliance", "export control", "customs",
+    # Sales titles that carry a security word. The sdr lane was deleted on 2026-09-18,
+    # but "Business Development Representative SaaS Cybersecurity" (Zimperium) and
+    # "Junior AE Cybersecurity" (CredShields) still came back as lane=security,
+    # because "cybersecurity" is a security keyword.
+    "business development", "sales development", " sdr", " bdr", " ae ", "sales rep",
 )
 # Support/IT/SecOps titles that legitimately carry the word "engineer". These are
 # exempt from the engineer/developer family below — see the carve-out in classify().
@@ -437,6 +481,8 @@ def _names_other_state(title: str) -> bool:
     """True if the title pins the role to a non-California state, e.g.
     "Outside Sales Representative - Portland, OR". Such postings are routinely filed
     under a country-wide location, so the location string alone won't catch them."""
+    if metro_of(title):
+        return False
     t = title.lower()
     if any(c in t for c in _CA_NON_BAY) and not is_bay_area(title):
         return True
@@ -654,7 +700,7 @@ def classify(title: str, lane_filter: str | None) -> str | None:
 
 
 def location_ok(location, title: str, url: str = "") -> bool:
-    """Bay Area, or a fully-remote-US role (Jack, 2026-07-19). Everything else drops."""
+    """Bay Area, NYC, Austin, Chicago, or a fully-remote-US role. Everything else drops."""
     # Some boards return a posting with no location at all (null, not ""). Coerce it to
     # the empty string, which the "remote" branch below already handles. Without this one
     # null-location posting raised AttributeError and killed the WHOLE run, losing every
@@ -664,6 +710,10 @@ def location_ok(location, title: str, url: str = "") -> bool:
     blob = f"{location} {title}".lower()
     if any(x in blob for x in NON_US):
         return False
+    if any(x in f"{blob} " for x in DC_NOVA) or blob.rstrip().endswith((", va", " va")):
+        return False
+    if metro_of(location) not in (None, "sf"):
+        return True
     if _other_state_only(location):
         return False
     if any(c in blob for c in COAST_LOCKED):
@@ -705,8 +755,52 @@ def load_blocked_companies() -> set[str]:
     return blocked
 
 
+def attempted_urls() -> set[str]:
+    """Every posting a wave has already judged: applied, skipped or blocked.
+
+    The backlog is seen.csv, and a fit-skip is marked seen, so before this every skipped
+    posting came straight back next wave: from 2026-09-26 to 10-04, 148 of 209 logged
+    attempts were a posting already attempted ("VP Threat Research" skipped 7 times).
+    A blocked one returns only through retry.py, which reads retry.csv, not this. An
+    `error` is left servable: it is transient, and three of the 13 applications landed
+    since 09-26 were a second try after one.
+    """
+    out: set[str] = set()
+    if not EVENTS_PATH.exists():
+        return out
+    for line in EVENTS_PATH.read_text(errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+            u = _norm(e.get("url") or "")
+        except (ValueError, AttributeError):
+            continue
+        if u and e.get("outcome") != "error":
+            out.add(u)
+    return out
+
+
+def attempted_titles() -> set[tuple[str, str]]:
+    """(company, title) of every judged posting, for rows whose URL can't be matched.
+
+    A seen.csv row can carry a company careers page ("https://ivo.ai/careers") while the
+    wave logged the ATS posting it led to (jobs.ashbyhq.com/ivo-inc/...). No URL rule joins
+    those two, so Ivo's GRC Analyst was served and skipped five times on 2026-10-24.
+    """
+    out: set[tuple[str, str]] = set()
+    if not EVENTS_PATH.exists():
+        return out
+    for line in EVENTS_PATH.read_text(errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("outcome") != "error" and e.get("company") and e.get("title"):
+            out.add((e["company"].strip().lower(), e["title"].strip().lower()))
+    return out
+
+
 def load_known_urls() -> set[str]:
-    known: set[str] = set()
+    known: set[str] = attempted_urls()
     for path in (APPLIED_PATH, SEEN_PATH, RETRY_PATH):
         if not path.exists():
             continue
@@ -724,7 +818,7 @@ def _dead_urls() -> set[str]:
     Deliberately does NOT include seen.csv -- in backlog mode seen.csv is the *source*,
     so the usual load_known_urls() dedup would filter out every candidate row.
     """
-    out: set[str] = set()
+    out: set[str] = attempted_urls()
     for name in ("applied.csv", "quarantine.csv", "retry_quarantine.csv", "retry.csv"):
         p = ROOT / "data" / name
         if not p.exists():
@@ -794,12 +888,19 @@ _HOST_PLATFORM = (
 # Workable's 0-for-147 is the one with a real sample behind it, and it agrees with what the
 # waves reported: hCaptcha/Turnstile blocks the submit regardless of source IP, so a
 # residential tunnel does not help. The others join it on the same evidence (Tier 3
-# HARD-AVOID in CLAUDE.md) with smaller samples. Ashby is deliberately NOT here -- 13 did
-# land, so it stays servable and simply sorts last via PLATFORM_CONVERSION.
+# HARD-AVOID in CLAUDE.md) with smaller samples. Ashby joined on 2026-10-24: its 13 landed
+# applications are all from July (last 07-09), and since then 0 of 326 logged attempts
+# landed (320 skipped, mostly by the brain's own HARD-AVOID rule, 6 blocked at submit).
+# Serving it only spent a page load per row for the brain to throw away.
+#
+# Lever joins it on the same evidence (2026-10-24): 22 applications in August, then 0 of
+# 129 attempts since September — every submit now draws an hCaptcha fingerprint challenge,
+# residential tunnel or not.
 #
 # This is a serving filter, not a discovery one: the rows stay in seen.csv, so removing a
 # name here is all it takes to start offering them again if a wall ever comes down.
-SUBMIT_BLOCKED = frozenset({"workable", "smartrecruiters", "workday", "icims", "linkedin"})
+SUBMIT_BLOCKED = frozenset({"workable", "smartrecruiters", "workday", "icims", "linkedin",
+                            "ashby", "lever"})
 
 
 def platform_of(url: str) -> str:
@@ -866,7 +967,8 @@ VERIFY_TTL_H = 24
 # year looser than the brain, so each of those rows was printed, opened in the browser
 # and thrown away at 5-10 minutes apiece. The min-years rule still protects the
 # "2+ required, 5+ preferred" posting: only the smallest number on the page counts.
-DEFAULT_MAX_YEARS = 3
+# 0 = off (Jack, 2026-11-01: senior jobs are in, so a years bar no longer drops rows).
+DEFAULT_MAX_YEARS = 0
 _YEARS_RE = re.compile(
     r"(\d{1,2})\s*(?:\+|plus|or more)?\s*(?:-|–|to)?\s*(?:\d{1,2})?\s*\+?\s*years?"
     # "2+ years required" and "3 years minimum" name a bar as plainly as "years of
@@ -1100,6 +1202,7 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
         print("[source] --backlog: no data/seen.csv", file=sys.stderr)
         return []
     dead = _dead_urls()
+    judged = attempted_titles()
     rows: list[dict] = []
     seen_urls: set[str] = set()
     total = 0
@@ -1121,6 +1224,8 @@ def backlog_rows(args, blocked: set[str]) -> list[dict]:
                 n_walled += 1
                 continue
             title = row.get("title") or ""
+            if (company.strip().lower(), title.strip().lower()) in judged:
+                continue
             if DEAD_MARKER_RE.search(title) or REJECT_NOTE_RE.search(title):
                 n_marked += 1
                 continue
